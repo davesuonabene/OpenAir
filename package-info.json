@@ -1,0 +1,24 @@
+{
+	"author" : "Isabel Kaspriskie",
+	"description" : "Native Max For Live GUIs for AirWindows Plugins",
+	"homepatcher" : "",
+	"max_version_min" : "8.0", 
+	"max_version_max" : "none",
+	"name" : "OpenAir",
+	"os" : {
+		"macintosh" : {
+			"platform" : [ "x64", "aarch64" ],
+			"min_version" : "none"
+		},
+		"windows" : {
+			"platform" : [ "x64" ],
+			"min_version" : "none"
+		}
+	},
+	"package_extra" : {
+		"reverse_domain" : "com.isabelgk"
+	},
+	"tags" : [ "effects", "audio", "airwindows", "m4l" ],
+	"version" : "1.0.0",
+	"website" : "https://github.com/isabelgk/OpenAir"
+}

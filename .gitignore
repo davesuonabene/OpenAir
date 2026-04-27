@@ -1,0 +1,11 @@
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Max / Ableton Live Backups
+*.maxpat.backup
+*.amxd.backup
+
+# Archives
+*.zip
+*.tar.gz
