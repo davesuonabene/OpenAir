@@ -1,0 +1,50 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+
+<!-- OpenAir Max Object Reference -->
+
+<c74object name='airfx.distance3~' category='spatial'>
+
+	<digest>Distance3 psychoacoustic depth and placement</digest>
+	<description>Distance3 pushes elements back in the mix using high-frequency air damping, acoustic dispersion, and slew limiting.</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name='author'>macchinette</metadata>
+		<metadata name='tag'>spatial</metadata>
+		<metadata name='tag'>airwindows</metadata>
+		<metadata name='tag'>openair</metadata>
+	</metadatalist>
+
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name='about'>
+			<digest>Get the original Airwindows 'about' text</digest>
+			<description>Get the original Airwindows 'about' text</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name='distance' get='1' set='1' type='float64' size='1'>
+			<digest>Perceived distance amount</digest>
+			<description>Perceived distance amount</description>
+		</attribute>
+		<attribute name='top db' get='1' set='1' type='float64' size='1'>
+			<digest>High frequency air loss trim</digest>
+			<description>High frequency air loss trim</description>
+		</attribute>
+		<attribute name='dry/wet' get='1' set='1' type='float64' size='1'>
+			<digest>Dry / wet mix ratio</digest>
+			<description>Dry / wet mix ratio</description>
+		</attribute>
+	</attributelist>
+
+	<!--RELATED-->
+	<seealsolist>
+	</seealsolist>
+
+</c74object>

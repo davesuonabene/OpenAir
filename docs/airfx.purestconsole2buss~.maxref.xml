@@ -1,0 +1,42 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+
+<!-- OpenAir Max Object Reference -->
+
+<c74object name='airfx.purestconsole2buss~' category='mix'>
+
+	<digest>PurestConsole2 transparent summing bus decode</digest>
+	<description>PurestConsole2 Buss sums PurestConsole2 Channel tracks with mathematical precision, expanding acoustic imaging and depth.</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name='author'>macchinette</metadata>
+		<metadata name='tag'>mix</metadata>
+		<metadata name='tag'>airwindows</metadata>
+		<metadata name='tag'>openair</metadata>
+	</metadatalist>
+
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name='about'>
+			<digest>Get the original Airwindows 'about' text</digest>
+			<description>Get the original Airwindows 'about' text</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name='vol' get='1' set='1' type='float64' size='1'>
+			<digest>Buss trim volume</digest>
+			<description>Buss trim volume</description>
+		</attribute>
+	</attributelist>
+
+	<!--RELATED-->
+	<seealsolist>
+	</seealsolist>
+
+</c74object>

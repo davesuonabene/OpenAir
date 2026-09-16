@@ -1,44 +1,89 @@
 # OpenAir
 
-**Native Max For Live GUIs for AirWindows Plugins**
+**Native Max For Live GUIs for Airwindows Plugins**
 
-OpenAir is a repository dedicated to hosting native Max for Live (M4L) ports of the incredible [Airwindows](https://www.airwindows.com/) VST plugins. This project leverages custom-built Max externals to bring the bare-metal DSP of Airwindows directly into the Ableton Live and Max/MSP ecosystem.
+OpenAir brings the bare-metal C++ DSP of [Airwindows](https://www.airwindows.com/) directly into the Ableton Live and Max/MSP ecosystem as native Max for Live (M4L) devices with custom-built user interfaces, parameter controls, gain staging, and metering.
 
-## Installation
-
-This repository is structured as a **Standard Max Package**. To install and use the plugins:
-
-1. Download or clone this repository.
-2. Move the entire `OpenAir` folder into your Max Packages directory:
-   * **Windows**: `Documents\Max 8\Packages\`
-   * **macOS**: `~/Documents/Max 8/Packages/`
-3. Restart Ableton Live or Max. The externals and `.amxd` plugins will automatically be indexed and available for use.
-
-## Repository Structure
-
-* `externals/`: Contains the compiled C++ DSP objects (`.mxe64` for Windows, `.mxo` for macOS).
-* `patchers/`: Houses the actual Max for Live Devices (`.amxd`) and any utility patches (`.maxpat`).
-* `docs/`: Contains interactive help files (`.maxhelp`) and XML reference documentation (`.maxref.xml`).
-* `media/`: Stores images, icons, and audio assets used by the plugin GUIs.
-
-## Contributing to Documentation
-
-To make this repository highly durable and user-friendly, we aim to provide standard Max documentation for every ported external. 
-
-### 1. Creating Help Files (`.maxhelp`)
-A Max help file is the interactive patch that opens when a user Alt+Clicks (Option+Clicks) on an object.
-* Open Max and create a new patch demonstrating the basic usage of the external.
-* Add comments explaining the inputs, outputs, and parameters.
-* Save the patch into the `docs/` folder.
-* **Naming Convention**: It must exactly match the external name with the `.maxhelp` extension. For example, if the external is `airfx.totape7~`, the help file must be named `airfx.totape7~.maxhelp`.
-
-### 2. Creating Reference Files (`.maxref.xml`)
-Reference files populate the Max reference sidebar and provide detailed documentation for object attributes and messages.
-* You can generate a basic XML template in Max by right-clicking an object and selecting **Open Reference**, then clicking the edit button.
-* Fill in the digest, description, and list out the parameters (attributes).
-* Save the generated XML into the `docs/` folder.
-* **Naming Convention**: Similar to help files, use `airfx.plugin_name~.maxref.xml` (e.g., `airfx.totape7~.maxref.xml`).
+Authored by **macchinette** • Current Pre-release: `v0.0.1`
 
 ---
 
-*Authored by Dave Suona Bene*
+## Included Devices (v0.0.1 Pre-Release)
+
+| Device | DSP Object | Description |
+|---|---|---|
+| **OA_Air4.amxd** | `airfx.air4~` | High-frequency air band exciter and presence shaper. |
+| **OA_BassKit.amxd** | `airfx.basskit~` | Sub-bass synthesis and low-end reinforcement with sub & voicing controls. |
+| **OA_clipsoftly.amxd** | `airfx.clipsoftly~` | Transparent analog-style soft-clipping saturation limiter. |
+| **OA_console0channel.amxd** | `airfx.console0channel~` | Console0 nonlinear channel-encoding strip (insert on individual tracks). |
+| **OA_console0bus.amxd** | `airfx.console0buss~` | Console0 complementary decoding summing bus (insert on group/master). |
+| **OA_distance3.amxd** | `airfx.distance3~` | Psychoacoustic depth and spatial distance placement. |
+| **OA_galactic.amxd** | `airfx.galactic~` | Lush, expansive ambient reverb with detune, brightness, and replace controls. |
+| **OA_purestconsolechannel2.amxd** | `airfx.purestconsole2channel~` | PurestConsole2 channel-encoding stage for pristine analog summing. |
+| **OA_purestconsolebus.amxd** | `airfx.purestconsole2buss~` | PurestConsole2 summing bus decode stage. |
+| **OA_totape8.amxd** | `airfx.totape8~` | Flagship analog tape emulation with head bump frequency, bias, flutter, and tilt. |
+
+---
+
+## Installation Guide
+
+OpenAir is distributed as a **Standard Max Package**. Once placed in your Max Packages folder, Ableton Live and Max/MSP will automatically index the devices and native C++ externals.
+
+### Step 1: Install the Package
+
+Extract the `OpenAir` folder from the download `.zip` and place it into your Max Packages directory:
+
+- **macOS**:
+  ```text
+  ~/Documents/Max 8/Packages/OpenAir
+  ```
+  *(or `~/Documents/Max 9/Packages/OpenAir` if using Max 9)*
+
+- **Windows**:
+  ```text
+  Documents\Max 8\Packages\OpenAir
+  ```
+  *(or `Documents\Max 9\Packages\OpenAir` if using Max 9)*
+
+*Alternatively, you can also place or drag the `.amxd` devices from `patchers/` directly into your Ableton Live User Library (`User Library/Presets/Audio Effects/Max Audio Effect/`).*
+
+---
+
+### Step 2: macOS Security Notice (Gatekeeper / Quarantine)
+
+Because the native `.mxo` externals are downloaded from the web (e.g. Patreon) and are not notarized by Apple's automated cloud service, macOS Gatekeeper may block them from loading by default.
+
+To authorize OpenAir on macOS, open the **Terminal** app and run this one-line command:
+
+```bash
+xattr -cr ~/Documents/Max\ 8/Packages/OpenAir
+```
+*(If using Max 9, replace `Max\ 8` with `Max\ 9`)*
+
+Alternatively, if prompted by macOS when loading a device, open **System Settings -> Privacy & Security**, scroll down to the Security section, and click **"Allow Anyway"** for the blocked external.
+
+---
+
+## Console Workflow Guide
+
+Airwindows console emulations (`Console0` and `PurestConsole2`) operate in complementary encode/decode pairs to recreate the sound of large-format analog mixing consoles:
+
+1. **Channel Devices** (`OA_console0channel.amxd` or `OA_purestconsolechannel2.amxd`):
+   - Place as the **final insert effect** on every individual audio track.
+2. **Buss Devices** (`OA_console0bus.amxd` or `OA_purestconsolebus.amxd`):
+   - Place as the **first insert effect** on your master or subgroup bus.
+3. **Gain Staging**:
+   - Keep your track volume faders around 0 dB (unity gain) for accurate mathematical decoding. Use the input/drive controls on the channel devices to balance levels into the summing bus.
+
+---
+
+## Requirements
+- **macOS**: macOS 10.15 Catalina or newer (native Universal binary: Apple Silicon M1/M2/M3/M4 & Intel).
+- **Windows**: Windows 10 or 11 (64-bit).
+- **Host**: Ableton Live 10, 11, or 12 with Max for Live (Max 8 or Max 9).
+
+---
+
+## Credits & Acknowledgements
+- **DSP Algorithms**: Ported from the incredible open-source DSP work of Chris Johnson ([Airwindows](https://www.airwindows.com/)).
+- **Max for Live Ports & GUIs**: Authored by **macchinette**.

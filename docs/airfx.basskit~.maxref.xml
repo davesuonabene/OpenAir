@@ -1,0 +1,54 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+
+<!-- OpenAir Max Object Reference -->
+
+<c74object name='airfx.basskit~' category='bass'>
+
+	<digest>BassKit sub-bass synthesis and reinforcement</digest>
+	<description>BassKit enhances bass content and generates sub-harmonic low-end energy while preserving clarity and headroom.</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name='author'>macchinette</metadata>
+		<metadata name='tag'>bass</metadata>
+		<metadata name='tag'>airwindows</metadata>
+		<metadata name='tag'>openair</metadata>
+	</metadatalist>
+
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name='about'>
+			<digest>Get the original Airwindows 'about' text</digest>
+			<description>Get the original Airwindows 'about' text</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name='drive' get='1' set='1' type='float64' size='1'>
+			<digest>Input drive into bass synthesis</digest>
+			<description>Input drive into bass synthesis</description>
+		</attribute>
+		<attribute name='subout' get='1' set='1' type='float64' size='1'>
+			<digest>Sub-bass output level</digest>
+			<description>Sub-bass output level</description>
+		</attribute>
+		<attribute name='bassout' get='1' set='1' type='float64' size='1'>
+			<digest>Upper bass output level</digest>
+			<description>Upper bass output level</description>
+		</attribute>
+		<attribute name='voicing' get='1' set='1' type='float64' size='1'>
+			<digest>Sub-harmonic frequency voicing selector</digest>
+			<description>Sub-harmonic frequency voicing selector</description>
+		</attribute>
+	</attributelist>
+
+	<!--RELATED-->
+	<seealsolist>
+	</seealsolist>
+
+</c74object>

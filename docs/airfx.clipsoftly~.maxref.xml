@@ -1,0 +1,39 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+
+<!-- OpenAir Max Object Reference -->
+
+<c74object name='airfx.clipsoftly~' category='dynamics'>
+
+	<digest>ClipSoftly transparent soft-clipping saturation limiter</digest>
+	<description>ClipSoftly provides gentle, tape-like peak rounding and saturation, trimming transient spikes transparently without harsh digital artifacts.</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name='author'>macchinette</metadata>
+		<metadata name='tag'>dynamics</metadata>
+		<metadata name='tag'>airwindows</metadata>
+		<metadata name='tag'>openair</metadata>
+	</metadatalist>
+
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name='about'>
+			<digest>Get the original Airwindows 'about' text</digest>
+			<description>Get the original Airwindows 'about' text</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attributelist>
+
+	</attributelist>
+
+	<!--RELATED-->
+	<seealsolist>
+	</seealsolist>
+
+</c74object>

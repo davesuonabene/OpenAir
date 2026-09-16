@@ -1,0 +1,42 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+
+<!-- OpenAir Max Object Reference -->
+
+<c74object name='airfx.purestconsole2channel~' category='mix'>
+
+	<digest>PurestConsole2 transparent analog channel strip</digest>
+	<description>PurestConsole2 Channel provides ultra-clean console encoding using purest-drive transfer functions for high-resolution summing.</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name='author'>macchinette</metadata>
+		<metadata name='tag'>mix</metadata>
+		<metadata name='tag'>airwindows</metadata>
+		<metadata name='tag'>openair</metadata>
+	</metadatalist>
+
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name='about'>
+			<digest>Get the original Airwindows 'about' text</digest>
+			<description>Get the original Airwindows 'about' text</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name='vol' get='1' set='1' type='float64' size='1'>
+			<digest>Channel trim volume</digest>
+			<description>Channel trim volume</description>
+		</attribute>
+	</attributelist>
+
+	<!--RELATED-->
+	<seealsolist>
+	</seealsolist>
+
+</c74object>

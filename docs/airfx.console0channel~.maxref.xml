@@ -1,0 +1,42 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+
+<!-- OpenAir Max Object Reference -->
+
+<c74object name='airfx.console0channel~' category='mix'>
+
+	<digest>Console0 nonlinear channel strip encoding stage</digest>
+	<description>Console0 Channel encodes individual track signals with subtle nonlinear saturation curves, paired with Console0 Buss on the mix bus.</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name='author'>macchinette</metadata>
+		<metadata name='tag'>mix</metadata>
+		<metadata name='tag'>airwindows</metadata>
+		<metadata name='tag'>openair</metadata>
+	</metadatalist>
+
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name='about'>
+			<digest>Get the original Airwindows 'about' text</digest>
+			<description>Get the original Airwindows 'about' text</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name='vol' get='1' set='1' type='float64' size='1'>
+			<digest>Channel trim volume (keep near 0 dB for unity encoding)</digest>
+			<description>Channel trim volume (keep near 0 dB for unity encoding)</description>
+		</attribute>
+	</attributelist>
+
+	<!--RELATED-->
+	<seealsolist>
+	</seealsolist>
+
+</c74object>

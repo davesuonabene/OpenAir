@@ -1,0 +1,58 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+
+<!-- OpenAir Max Object Reference -->
+
+<c74object name='airfx.galactic~' category='reverb'>
+
+	<digest>Galactic expansive ambient reverb and space</digest>
+	<description>Galactic creates immense, shimmering ambient reverberation with unique pitch-detuned cross-reflections.</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name='author'>macchinette</metadata>
+		<metadata name='tag'>reverb</metadata>
+		<metadata name='tag'>airwindows</metadata>
+		<metadata name='tag'>openair</metadata>
+	</metadatalist>
+
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name='about'>
+			<digest>Get the original Airwindows 'about' text</digest>
+			<description>Get the original Airwindows 'about' text</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name='replace' get='1' set='1' type='float64' size='1'>
+			<digest>Input replacement / reverb ducking</digest>
+			<description>Input replacement / reverb ducking</description>
+		</attribute>
+		<attribute name='brightness' get='1' set='1' type='float64' size='1'>
+			<digest>High frequency dampening and sheen</digest>
+			<description>High frequency dampening and sheen</description>
+		</attribute>
+		<attribute name='detune' get='1' set='1' type='float64' size='1'>
+			<digest>Cross-reflection chorus detune amount</digest>
+			<description>Cross-reflection chorus detune amount</description>
+		</attribute>
+		<attribute name='bigness' get='1' set='1' type='float64' size='1'>
+			<digest>Reverb decay length and chamber size</digest>
+			<description>Reverb decay length and chamber size</description>
+		</attribute>
+		<attribute name='dry/wet' get='1' set='1' type='float64' size='1'>
+			<digest>Dry / wet mix ratio</digest>
+			<description>Dry / wet mix ratio</description>
+		</attribute>
+	</attributelist>
+
+	<!--RELATED-->
+	<seealsolist>
+	</seealsolist>
+
+</c74object>

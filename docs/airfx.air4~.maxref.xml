@@ -1,0 +1,54 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+
+<!-- OpenAir Max Object Reference -->
+
+<c74object name='airfx.air4~' category='eq'>
+
+	<digest>Air4 high-frequency enhancement & air band EQ</digest>
+	<description>Air4 is an Airwindows algorithm designed to boost and shape top-end air frequencies with pristine clarity and organic analog sheen.</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name='author'>macchinette</metadata>
+		<metadata name='tag'>eq</metadata>
+		<metadata name='tag'>airwindows</metadata>
+		<metadata name='tag'>openair</metadata>
+	</metadatalist>
+
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name='about'>
+			<digest>Get the original Airwindows 'about' text</digest>
+			<description>Get the original Airwindows 'about' text</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name='air' get='1' set='1' type='float64' size='1'>
+			<digest>Air boost amount</digest>
+			<description>Air boost amount</description>
+		</attribute>
+		<attribute name='ratio' get='1' set='1' type='float64' size='1'>
+			<digest>Air frequency ratio</digest>
+			<description>Air frequency ratio</description>
+		</attribute>
+		<attribute name='darkf' get='1' set='1' type='float64' size='1'>
+			<digest>Dark filter frequency</digest>
+			<description>Dark filter frequency</description>
+		</attribute>
+		<attribute name='gnd' get='1' set='1' type='float64' size='1'>
+			<digest>Ground reference level</digest>
+			<description>Ground reference level</description>
+		</attribute>
+	</attributelist>
+
+	<!--RELATED-->
+	<seealsolist>
+	</seealsolist>
+
+</c74object>

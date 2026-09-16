@@ -1,0 +1,74 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes'?>
+
+<!-- OpenAir Max Object Reference -->
+
+<c74object name='airfx.totape8~' category='tape'>
+
+	<digest>ToTape8 analog tape saturation, flutter, and head bump</digest>
+	<description>ToTape8 is Airwindows' flagship analog tape simulation, modeling tape compression, magnetic hysteresis, flutter, bias, and bass head bump.</description>
+
+	<!--METADATA-->
+	<metadatalist>
+		<metadata name='author'>macchinette</metadata>
+		<metadata name='tag'>tape</metadata>
+		<metadata name='tag'>airwindows</metadata>
+		<metadata name='tag'>openair</metadata>
+	</metadatalist>
+
+	<!--ARGUMENTS-->
+	<objarglist>
+	</objarglist>
+
+	<!--MESSAGES-->
+	<methodlist>
+		<method name='about'>
+			<digest>Get the original Airwindows 'about' text</digest>
+			<description>Get the original Airwindows 'about' text</description>
+		</method>
+	</methodlist>
+
+	<!--ATTRIBUTES-->
+	<attributelist>
+		<attribute name='input' get='1' set='1' type='float64' size='1'>
+			<digest>Input drive into tape saturation</digest>
+			<description>Input drive into tape saturation</description>
+		</attribute>
+		<attribute name='output' get='1' set='1' type='float64' size='1'>
+			<digest>Master output level trim</digest>
+			<description>Master output level trim</description>
+		</attribute>
+		<attribute name='headbmp' get='1' set='1' type='float64' size='1'>
+			<digest>Head bump resonance amount</digest>
+			<description>Head bump resonance amount</description>
+		</attribute>
+		<attribute name='headfrq' get='1' set='1' type='float64' size='1'>
+			<digest>Head bump center frequency</digest>
+			<description>Head bump center frequency</description>
+		</attribute>
+		<attribute name='flutter' get='1' set='1' type='float64' size='1'>
+			<digest>Tape flutter amount</digest>
+			<description>Tape flutter amount</description>
+		</attribute>
+		<attribute name='flutspd' get='1' set='1' type='float64' size='1'>
+			<digest>Tape flutter speed / wow rate</digest>
+			<description>Tape flutter speed / wow rate</description>
+		</attribute>
+		<attribute name='bias' get='1' set='1' type='float64' size='1'>
+			<digest>High-frequency tape bias level</digest>
+			<description>High-frequency tape bias level</description>
+		</attribute>
+		<attribute name='shape' get='1' set='1' type='float64' size='1'>
+			<digest>Tape saturation curve hardness</digest>
+			<description>Tape saturation curve hardness</description>
+		</attribute>
+		<attribute name='tilt' get='1' set='1' type='float64' size='1'>
+			<digest>High/low frequency spectral tilt</digest>
+			<description>High/low frequency spectral tilt</description>
+		</attribute>
+	</attributelist>
+
+	<!--RELATED-->
+	<seealsolist>
+	</seealsolist>
+
+</c74object>
