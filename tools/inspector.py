@@ -32,10 +32,13 @@ class InspectionResult:
     production_devices: List[str] = field(default_factory=list)
 
 
-def parse_amxd_patcher(file_path: str) -> Optional[dict]:
-    """Parse JSON patcher data from an AMXD file (handles ampf/RIFF container and raw JSON)."""
-    with open(file_path, "rb") as f:
-        raw = f.read()
+def parse_amxd_patcher(file_path_or_bytes) -> Optional[dict]:
+    """Parse JSON patcher data from an AMXD file (path or raw bytes)."""
+    if isinstance(file_path_or_bytes, (bytes, bytearray)):
+        raw = bytes(file_path_or_bytes)
+    else:
+        with open(file_path_or_bytes, "rb") as f:
+            raw = f.read()
 
     idx = raw.find(b'"patcher"')
     if idx == -1:
@@ -76,10 +79,16 @@ def extract_externals_from_patcher(patcher: dict) -> List[str]:
     return sorted(list(externals))
 
 
-def inspect_workspace(workspace_root: str) -> InspectionResult:
-    """Inspect all devices in m4lplugins/ and cross-reference with externals/."""
+def inspect_workspace(
+    workspace_root: str, airfx_root: Optional[str] = None
+) -> InspectionResult:
+    """Inspect all devices in m4lplugins/ and cross-reference with externals in airfx."""
     m4l_dir = os.path.join(workspace_root, "m4lplugins")
-    externals_dir = os.path.join(workspace_root, "externals")
+    
+    # Locate externals in airfx (single source of truth)
+    default_airfx = os.path.abspath(os.path.join(workspace_root, "..", "airfx"))
+    src_airfx = airfx_root or default_airfx
+    externals_dir = os.path.join(src_airfx, "externals")
 
     result = InspectionResult()
     if not os.path.isdir(m4l_dir):

@@ -2,8 +2,10 @@
 CLI entry point for the OpenAir release toolchain.
 
 Usage:
-  python tools/cli.py inspect
-  python tools/cli.py build [--version 0.0.1] [--full] [--out-dir release/]
+  python tools/cli.py inspect [--airfx-dir ../airfx]
+  python tools/cli.py build [--version 0.0.1] [--airfx-dir ../airfx] [--full] [--out-dir release/]
+  python tools/cli.py freeze [--device OA_galactic.amxd] [--all] [--airfx-dir ../airfx]
+  python tools/cli.py unfreeze [--device OA_galactic.amxd] [--all]
   python tools/cli.py verify [zip_path]
 """
 
@@ -19,6 +21,7 @@ if WORKSPACE_ROOT not in sys.path:
 
 from tools.builder import build_release_package
 from tools.inspector import inspect_workspace
+from tools.packager import freeze_device, unfreeze_device
 from tools.verifier import verify_release_zip
 
 
@@ -27,7 +30,7 @@ def cmd_inspect(args):
     print("OpenAir Toolchain: Inspecting Devices & Dependencies")
     print("=" * 70)
 
-    result = inspect_workspace(WORKSPACE_ROOT)
+    result = inspect_workspace(WORKSPACE_ROOT, airfx_root=args.airfx_dir)
 
     print(f"\nFound {len(result.devices)} device(s) in m4lplugins/:")
     print(f"  - Production devices ({len(result.production_devices)}):")
@@ -59,8 +62,72 @@ def cmd_inspect(args):
             print(f"  ! {m}")
         return 1
     else:
-        print("\nAll required Windows and macOS externals are available!")
+        print("\nAll required Windows and macOS externals are available in airfx!")
         return 0
+
+
+def cmd_freeze(args):
+    print("=" * 70)
+    print("OpenAir Toolchain: Freezing M4L Devices for Standalone Distribution")
+    print("=" * 70)
+
+    m4l_dir = os.path.join(WORKSPACE_ROOT, "m4lplugins")
+    default_airfx = os.path.abspath(os.path.join(WORKSPACE_ROOT, "..", "airfx"))
+    src_airfx = args.airfx_dir or default_airfx
+    externals_dir = os.path.join(src_airfx, "externals")
+
+    devices_to_freeze = []
+    if args.device:
+        devices_to_freeze.append(args.device)
+    elif args.all:
+        for f in sorted(os.listdir(m4l_dir)):
+            if f.endswith(".amxd") and f != "OA_init.amxd":
+                devices_to_freeze.append(f)
+    else:
+        print("Please specify --device <filename.amxd> or --all")
+        return 1
+
+    success_count = 0
+    for dev_name in devices_to_freeze:
+        dev_path = os.path.join(m4l_dir, dev_name)
+        if not os.path.isfile(dev_path):
+            print(f"Error: {dev_name} not found in m4lplugins/")
+            continue
+        if freeze_device(dev_path, externals_dir):
+            success_count += 1
+
+    print(f"\nFreezing complete! {success_count}/{len(devices_to_freeze)} device(s) successfully packaged.")
+    return 0 if success_count == len(devices_to_freeze) else 1
+
+
+def cmd_unfreeze(args):
+    print("=" * 70)
+    print("OpenAir Toolchain: Unfreezing M4L Devices for Lightweight Development")
+    print("=" * 70)
+
+    m4l_dir = os.path.join(WORKSPACE_ROOT, "m4lplugins")
+    devices_to_unfreeze = []
+    if args.device:
+        devices_to_unfreeze.append(args.device)
+    elif args.all:
+        for f in sorted(os.listdir(m4l_dir)):
+            if f.endswith(".amxd") and f != "OA_init.amxd":
+                devices_to_unfreeze.append(f)
+    else:
+        print("Please specify --device <filename.amxd> or --all")
+        return 1
+
+    success_count = 0
+    for dev_name in devices_to_unfreeze:
+        dev_path = os.path.join(m4l_dir, dev_name)
+        if not os.path.isfile(dev_path):
+            print(f"Error: {dev_name} not found in m4lplugins/")
+            continue
+        if unfreeze_device(dev_path):
+            success_count += 1
+
+    print(f"\nUnfreezing complete! {success_count}/{len(devices_to_unfreeze)} device(s) converted to lightweight dev format.")
+    return 0 if success_count == len(devices_to_unfreeze) else 1
 
 
 def cmd_build(args):
@@ -69,7 +136,7 @@ def cmd_build(args):
     print("=" * 70)
 
     curated = not args.full
-    mode_str = "Curated (Only needed externals)" if curated else "Full (All 401 externals)"
+    mode_str = "Curated (Only needed externals)" if curated else "Full (All externals)"
     print(f"Mode:    {mode_str}")
     if args.version:
         print(f"Version: {args.version}")
@@ -78,9 +145,11 @@ def cmd_build(args):
 
     build_res = build_release_package(
         workspace_root=WORKSPACE_ROOT,
+        airfx_root=args.airfx_dir,
         out_dir=args.out_dir,
         version=args.version,
         curated=curated,
+        freeze_devices=not args.no_freeze,
     )
 
     print("\nBuild Complete!")
@@ -107,7 +176,6 @@ def cmd_build(args):
 def cmd_verify(args):
     zip_path = args.zip_path
     if not zip_path:
-        # Default to the newest zip in release/
         rel_dir = os.path.join(WORKSPACE_ROOT, "release")
         if os.path.isdir(rel_dir):
             zips = [
@@ -160,13 +228,27 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # Inspect command
-    subparsers.add_parser("inspect", help="Inspect M4L devices and external dependencies")
+    inspect_parser = subparsers.add_parser("inspect", help="Inspect M4L devices and external dependencies")
+    inspect_parser.add_argument("--airfx-dir", help="Path to airfx repo root (default: ../airfx)")
+
+    # Freeze command
+    freeze_parser = subparsers.add_parser("freeze", help="Freeze M4L devices into standalone collectives")
+    freeze_parser.add_argument("--device", help="Specific device name (e.g. OA_galactic.amxd)")
+    freeze_parser.add_argument("--all", action="store_true", help="Freeze all production devices")
+    freeze_parser.add_argument("--airfx-dir", help="Path to airfx repo root (default: ../airfx)")
+
+    # Unfreeze command
+    unfreeze_parser = subparsers.add_parser("unfreeze", help="Unfreeze M4L devices for lightweight rapid development")
+    unfreeze_parser.add_argument("--device", help="Specific device name (e.g. OA_galactic.amxd)")
+    unfreeze_parser.add_argument("--all", action="store_true", help="Unfreeze all production devices")
 
     # Build command
     build_parser = subparsers.add_parser("build", help="Build release ZIP package")
     build_parser.add_argument("--version", help="Version override (e.g. 0.0.1)")
     build_parser.add_argument("--out-dir", help="Output directory (defaults to release/)")
-    build_parser.add_argument("--full", action="store_true", help="Include all 401 externals instead of curated selection")
+    build_parser.add_argument("--airfx-dir", help="Path to airfx repo root (default: ../airfx)")
+    build_parser.add_argument("--no-freeze", action="store_true", help="Do not auto-freeze devices inside release zip")
+    build_parser.add_argument("--full", action="store_true", help="Include all externals instead of curated selection")
 
     # Verify command
     verify_parser = subparsers.add_parser("verify", help="Verify a release ZIP package")
@@ -175,6 +257,10 @@ def main():
     args = parser.parse_args()
     if args.command == "inspect":
         sys.exit(cmd_inspect(args))
+    elif args.command == "freeze":
+        sys.exit(cmd_freeze(args))
+    elif args.command == "unfreeze":
+        sys.exit(cmd_unfreeze(args))
     elif args.command == "build":
         sys.exit(cmd_build(args))
     elif args.command == "verify":

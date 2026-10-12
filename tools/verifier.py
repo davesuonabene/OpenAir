@@ -166,17 +166,15 @@ def verify_release_zip(zip_path: str) -> VerificationResult:
             for p in result.patchers_found:
                 # read amxd from zip
                 amxd_bytes = zf.read(f"OpenAir/patchers/{p}")
-                # check for airfx
-                import re
-
-                matches = set(
-                    re.findall(
-                        r"airfx\.[a-zA-Z0-9~]+",
-                        amxd_bytes.decode("latin1", errors="ignore"),
-                    )
-                )
-                for m in matches:
-                    clean = m.rstrip("~") + "~"
+                from tools.inspector import parse_amxd_patcher, extract_externals_from_patcher
+                patch_dict = parse_amxd_patcher(amxd_bytes)
+                if patch_dict:
+                    matches = extract_externals_from_patcher(patch_dict)
+                else:
+                    matches = []
+                for clean in matches:
+                    if clean == "airfx.__":
+                        continue
                     if clean not in result.externals_found_win:
                         result.errors.append(
                             f"Device {p} references {clean} but .mxe64 is missing in ZIP"

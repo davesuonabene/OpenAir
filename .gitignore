@@ -12,4 +12,6 @@ Thumbs.db
 
 # Private Workspace Planning, Drafts & Local Agent Config
 /.todo/
-/.agents/
+/.agents/*
+!/.agents/rules/
+
