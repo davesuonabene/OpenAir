@@ -22,6 +22,7 @@ if WORKSPACE_ROOT not in sys.path:
 from tools.builder import build_release_package
 from tools.inspector import inspect_workspace
 from tools.packager import freeze_device, unfreeze_device
+from tools.screenshot_batch import render_plugin_screenshot, DEVICE_CONFIGS
 from tools.verifier import verify_release_zip
 
 
@@ -128,6 +129,27 @@ def cmd_unfreeze(args):
 
     print(f"\nUnfreezing complete! {success_count}/{len(devices_to_unfreeze)} device(s) converted to lightweight dev format.")
     return 0 if success_count == len(devices_to_unfreeze) else 1
+
+
+def cmd_screenshot(args):
+    print("=" * 70)
+    print("OpenAir Toolchain: Rendering High-Res Device Screenshots")
+    print("=" * 70)
+
+    out_dir = args.out_dir or os.path.join(WORKSPACE_ROOT, "media", "v0.0.1")
+    plugins = [args.device] if args.device else sorted(list(DEVICE_CONFIGS.keys()))
+
+    success_count = 0
+    for p in plugins:
+        if render_plugin_screenshot(p, out_dir=out_dir):
+            success_count += 1
+        time.sleep(0.5)
+
+    import subprocess
+    subprocess.run(["taskkill", "/F", "/IM", "Max.exe"], capture_output=True)
+
+    print(f"\nScreenshot render complete: {success_count}/{len(plugins)} captured successfully to {out_dir}")
+    return 0 if success_count == len(plugins) else 1
 
 
 def cmd_build(args):
@@ -254,6 +276,11 @@ def main():
     verify_parser = subparsers.add_parser("verify", help="Verify a release ZIP package")
     verify_parser.add_argument("zip_path", nargs="?", help="Path to ZIP file (defaults to latest in release/)")
 
+    # Screenshot command
+    screenshot_parser = subparsers.add_parser("screenshot", help="Render clean high-res device screenshots without borders")
+    screenshot_parser.add_argument("--device", help="Specific device name (e.g. OA_totape8.amxd)")
+    screenshot_parser.add_argument("--out-dir", help="Output directory (defaults to media/v0.0.1/)")
+
     args = parser.parse_args()
     if args.command == "inspect":
         sys.exit(cmd_inspect(args))
@@ -261,6 +288,8 @@ def main():
         sys.exit(cmd_freeze(args))
     elif args.command == "unfreeze":
         sys.exit(cmd_unfreeze(args))
+    elif args.command == "screenshot":
+        sys.exit(cmd_screenshot(args))
     elif args.command == "build":
         sys.exit(cmd_build(args))
     elif args.command == "verify":
