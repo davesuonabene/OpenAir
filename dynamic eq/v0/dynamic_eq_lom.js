@@ -20,7 +20,7 @@ outlets = 5;
 // Outlet 4 -> live.routing (Sidechain B, Inlets 5/6)
 
 var NUM_BANDS = 8;
-var selected_band = 0; // 0..7
+var selected_band = 2; // Default selected band = Band 3 (1.00 kHz), matching EQ Eight!
 var sc_panel_open = 0;  // Left Sidechain panel (0 or 1, +154px)
 var dyn_panel_open = 0; // Right Dynamic panel (0 or 1, +130px)
 
@@ -46,8 +46,9 @@ var rt2_type_list = [];
 var rt2_chan_list = [];
 
 var DEFAULT_FREQS = [30.0, 200.0, 1000.0, 5000.0, 100.0, 1000.0, 5000.0, 18000.0];
-var DEFAULT_TYPES = [1, 3, 3, 5, 3, 3, 3, 6];
+var DEFAULT_TYPES = [2, 3, 3, 5, 3, 3, 3, 6];
 var bands = [];
+var drag_tick = 0;
 
 for (var i = 0; i < NUM_BANDS; i++) {
     bands.push({
@@ -261,6 +262,7 @@ function sync_all() {
     outlet(1, "dyn_scale", global_scale / 100.0);
     outlet(1, "out_gain", out_gain);
     outlet(1, "adapt_q", adaptive_q);
+    outlet(1, "rta_active", rta_on);
     update_sc_dsp();
     update_solo_dsp();
 
@@ -347,6 +349,7 @@ function ui_adapt_q(v) {
 
 function ui_rta_on(v) {
     rta_on = v ? 1 : 0;
+    outlet(1, "rta_active", rta_on);
     outlet(0, "set_rta_on", rta_on);
 }
 
@@ -539,9 +542,21 @@ function band_fg(idx, f, g) {
     var p = "b" + (idx + 1) + "_";
     outlet(1, p + "freq", b.freq);
     outlet(1, p + "gain", b.gain);
-    if (idx === selected_band) {
+    drag_tick = (drag_tick + 1) % 5;
+    if (idx === selected_band && drag_tick === 0) {
         set_named_val("band_freq", b.freq);
         set_named_val("band_gain", b.gain);
+    }
+}
+
+function drag_end(idx) {
+    if (idx < 0 || idx >= NUM_BANDS) return;
+    if (idx === selected_band) {
+        var b = bands[idx];
+        set_named_val("band_freq", b.freq);
+        set_named_val("band_gain", b.gain);
+        set_named_val("band_q", b.q);
+        set_named_val("band_dyndepth", b.range);
     }
 }
 

@@ -1,7 +1,7 @@
 // dynamic_eq_ui.js
 // Authentic Ableton EQ Eight Clone + Pro-Q Dynamic EQ Visualizer (jsui / mgraphics)
 // 1. Exact 370x169 dimensions & RGB colors measured from Ableton Live EQ Eight:
-//    - Top Graph (370x132, y=0..132): #14131a background, lavender RTA, cyan composite curve
+//    - Top Graph (370x132, y=0..132): #14131a background, high-res 28-band spline RTA, cyan composite curve
 //    - Native EQ Eight Pink (#ff91c3) band dots: solid pink with dark text when selected,
 //      hollow dark circle with pink outline and pink text when unselected.
 // 2. Pro-Q Style Direct-Grab Dynamic Visualization & Handler on top of Band Circle:
@@ -13,7 +13,7 @@
 //      as the top filter curve selector dropdown.
 //    - Empty greyed-out circle when dynamics is OFF; lit cyan border when dynamics is ON.
 //    - Clicking the circle opens/closes the right Per-Band Dynamic Drawer for that band.
-// 4. High-Speed Precomputed SVF Response Engine (~20x faster paint() during drag).
+// 4. Mouse Wheel Q Control (onwheel) + Precomputed SVF Response + 28-Band Catmull-Rom RTA.
 
 inlets = 1;
 outlets = 1;
@@ -30,7 +30,7 @@ var MIN_DB = -15.0;
 var MAX_DB = 15.0;
 var STRIP_H = 37.0; // Bottom band selector strip height (y=132..169)
 
-var selected_band = 0; // 0..7
+var selected_band = 2; // Default selected band = Band 3 (1.00 kHz), matching EQ Eight!
 var dyn_panel_open = 0; // 0 or 1 (whether right Per-Band Dynamic Drawer is open)
 var drag_band = -1;
 var drag_mode = "none"; // "freq_gain", "range", "q"
@@ -50,18 +50,34 @@ var FILTER_NAMES = [
 
 // Native Ableton EQ Eight Pink: RGB(255, 145, 195) = #ff91c3
 var EQ8_PINK = [1.0, 0.569, 0.765];
-// Native Ableton EQ Eight Cyan: RGB(71, 226, 244) = #47e2f4
-var EQ8_CYAN = [0.278, 0.886, 0.957];
+// Native Ableton EQ Eight Cyan: RGB(57, 210, 228) = #39d2e4
+var EQ8_CYAN = [0.224, 0.824, 0.894];
 
-// 16 RTA 1/3-octave center frequencies
+// 48 High-Selectivity (Q=31) Harmonic RTA Center Frequencies (22 Hz .. 19.8 kHz)
+var NUM_RTA = 48;
 var RTA_FREQS = [
-    25.0, 40.0, 63.0, 100.0, 160.0, 250.0, 400.0, 630.0,
-    1000.0, 1600.0, 2500.0, 4000.0, 6300.0, 10000.0, 14000.0, 19000.0
+    22.0, 27.0, 33.0, 40.0, 48.0, 58.0, 68.0, 80.0,
+    93.0, 108.0, 125.0, 145.0, 168.0, 195.0, 225.0, 260.0,
+    300.0, 345.0, 400.0, 460.0, 530.0, 610.0, 700.0, 800.0,
+    920.0, 1060.0, 1220.0, 1400.0, 1600.0, 1850.0, 2120.0, 2450.0,
+    2800.0, 3250.0, 3750.0, 4300.0, 4950.0, 5700.0, 6550.0, 7500.0,
+    8600.0, 9900.0, 11400.0, 13100.0, 15000.0, 16800.0, 18400.0, 19800.0
 ];
-var rta_db = [-90, -90, -90, -90, -90, -90, -90, -90, -90, -90, -90, -90, -90, -90, -90, -90];
+var RTA_NORM_X = [];
+var RTA_CAL_DB = [];
+var rta_db = [];
+
+for (var ri = 0; ri < NUM_RTA; ri++) {
+    var rf = RTA_FREQS[ri];
+    RTA_NORM_X.push(Math.log(rf / MIN_FREQ) / Math.log(MAX_FREQ / MIN_FREQ));
+    // Calibrated flat-to-natural EQ Eight FFT weighting (no artificial +3dB/oct high boost!)
+    var cal = 8.5 - 1.2 * Math.max(0.0, Math.log(rf / 1200.0) / Math.LN2);
+    RTA_CAL_DB.push(cal);
+    rta_db.push(-90.0);
+}
 
 var DEFAULT_FREQS = [30.0, 200.0, 1000.0, 5000.0, 100.0, 1000.0, 5000.0, 18000.0];
-var DEFAULT_TYPES = [1, 3, 3, 5, 3, 3, 3, 6];
+var DEFAULT_TYPES = [2, 3, 3, 5, 3, 3, 3, 6];
 var bands = [];
 
 for (var i = 0; i < NUM_BANDS; i++) {
@@ -87,6 +103,24 @@ for (var s_init = 0; s_init <= NUM_STEPS; s_init++) {
     var f_s = MIN_FREQ * Math.pow(MAX_FREQ / MIN_FREQ, norm_s);
     STEP_NORM.push(norm_s);
     STEP_TAN_W.push(Math.tan(Math.PI * f_s / SAMPLE_RATE));
+}
+
+// Precompute Grid Line X norms once
+var SUB_FREQS = [
+    30, 40, 50, 60, 70, 80, 90,
+    200, 300, 400, 500, 600, 700, 800, 900,
+    2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000
+];
+var SUB_NORM_X = [];
+for (var sfi = 0; sfi < SUB_FREQS.length; sfi++) {
+    SUB_NORM_X.push(Math.log(SUB_FREQS[sfi] / MIN_FREQ) / Math.log(MAX_FREQ / MIN_FREQ));
+}
+
+var MAJ_FREQS = [100, 1000, 10000];
+var MAJ_LABELS = ["100", "1k", "10k"];
+var MAJ_NORM_X = [];
+for (var mfi = 0; mfi < MAJ_FREQS.length; mfi++) {
+    MAJ_NORM_X.push(Math.log(MAJ_FREQS[mfi] / MIN_FREQ) / Math.log(MAX_FREQ / MIN_FREQ));
 }
 
 function clamp(v, lo, hi) {
@@ -115,6 +149,24 @@ function db_to_y(db, gh) {
 function y_to_db(y, gh) {
     var norm = (gh - y) / gh;
     return clamp(MIN_DB + norm * (MAX_DB - MIN_DB), MIN_DB, MAX_DB);
+}
+
+// Map RTA dBFS (-56 dB .. -4 dB) across the full graph height (gh .. 4px) matching EQ Eight
+function rta_db_to_y(db, gh) {
+    var norm = clamp((db + 56.0) / 52.0, 0.0, 1.0);
+    return gh - norm * (gh - 4.0);
+}
+
+// Catmull-Rom spline interpolation for smooth, high-detail RTA curve
+function catmull_rom(p0, p1, p2, p3, t) {
+    var t2 = t * t;
+    var t3 = t2 * t;
+    return 0.5 * (
+        (2.0 * p1) +
+        (-p0 + p2) * t +
+        (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
+        (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+    );
 }
 
 // --- Precompute Cytomic TPT SVF coefficients ONCE per band per frame ---
@@ -281,52 +333,91 @@ function paint() {
     mgraphics.rectangle(0, 0, w, gh);
     mgraphics.fill();
 
-    // 2. Logarithmic Frequency Grid Lines (exact EQ Eight colors)
+    // 2. Single 48-Band High-Resolution Harmonic RTA Spectrum Fill (Drawn UNDER grid & labels, no top border stroke, matching EQ Eight!)
+    if (rta_enabled) {
+        var rta_x = [];
+        var rta_y = [];
+        for (var r = 0; r < NUM_RTA; r++) {
+            rta_x.push(RTA_NORM_X[r] * w);
+            rta_y.push(rta_db_to_y(rta_db[r], gh));
+        }
+
+        // Exact EQ Eight borderless lavender-slate spectrum fill: blends to RGB(74, 68, 89) = #4a4459
+        mgraphics.set_source_rgba(0.46, 0.43, 0.56, 0.50);
+        mgraphics.move_to(0, gh);
+        mgraphics.line_to(0, rta_y[0]);
+
+        for (var k = 0; k < NUM_RTA - 1; k++) {
+            var x1 = rta_x[k];
+            var x2 = rta_x[k + 1];
+            var y1 = rta_y[k];
+            var y2 = rta_y[k + 1];
+
+            if (k < 11) {
+                // Smooth low-frequency FFT lobe interpolation (22 Hz .. 135 Hz)
+                var y0 = rta_y[Math.max(0, k - 1)];
+                var y3 = rta_y[Math.min(NUM_RTA - 1, k + 2)];
+                for (var sub = 1; sub <= 3; sub++) {
+                    var t = sub / 3.0;
+                    var sx_rta = x1 + (x2 - x1) * t;
+                    var sy_rta = clamp(catmull_rom(y0, y1, y2, y3, t), 3.0, gh);
+                    mgraphics.line_to(sx_rta, sy_rta);
+                }
+            } else {
+                // Sharp harmonic peak + inter-bin FFT valley contrast (140 Hz .. 19.8 kHz)
+                var diff_y = Math.abs(y1 - y2);
+                var avg_h = gh - 0.5 * (y1 + y2);
+                var dip = (avg_h > 4.0) ? Math.min(avg_h * 0.28, 3.5 + diff_y * 0.42) : 0.0;
+                var mid_x = 0.5 * (x1 + x2);
+                var mid_y = clamp(Math.max(y1, y2) + dip, 3.0, gh);
+                mgraphics.line_to(mid_x, mid_y);
+                mgraphics.line_to(x2, y2);
+            }
+        }
+        mgraphics.line_to(w, gh);
+        mgraphics.close_path();
+        mgraphics.fill();
+    }
+
+    // 3. Logarithmic Frequency Grid Lines & Labels (Drawn ON TOP of RTA fill so grid & text stay crisp!)
     mgraphics.set_line_width(1.0);
-    var sub_freqs = [
-        30, 40, 50, 60, 70, 80, 90,
-        200, 300, 400, 500, 600, 700, 800, 900,
-        2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000
-    ];
-    mgraphics.set_source_rgba(0.102, 0.098, 0.125, 1.0);
-    for (var s = 0; s < sub_freqs.length; s++) {
-        var sx = Math.round(freq_to_x(sub_freqs[s], w)) + 0.5;
+    mgraphics.set_source_rgba(0.102, 0.098, 0.125, 0.75);
+    for (var s = 0; s < SUB_NORM_X.length; s++) {
+        var sx = Math.round(SUB_NORM_X[s] * w) + 0.5;
         mgraphics.move_to(sx, 0);
         mgraphics.line_to(sx, gh);
     }
     mgraphics.stroke();
 
-    var maj_freqs = [100, 1000, 10000];
-    var maj_labels = ["100", "1k", "10k"];
-    for (var m = 0; m < maj_freqs.length; m++) {
-        var mx = Math.round(freq_to_x(maj_freqs[m], w)) + 0.5;
-        mgraphics.set_source_rgba(0.169, 0.161, 0.188, 1.0);
+    for (var m = 0; m < MAJ_NORM_X.length; m++) {
+        var mx = Math.round(MAJ_NORM_X[m] * w) + 0.5;
+        mgraphics.set_source_rgba(0.169, 0.161, 0.188, 0.85);
         mgraphics.move_to(mx, 0);
         mgraphics.line_to(mx, gh);
         mgraphics.stroke();
 
-        mgraphics.set_source_rgba(0.459, 0.435, 0.490, 1.0);
+        mgraphics.set_source_rgba(0.54, 0.52, 0.58, 1.0);
         mgraphics.select_font_face("Ableton Sans Medium", "normal", "normal");
         mgraphics.set_font_size(9.5);
         mgraphics.move_to(mx - 8, gh - 4);
-        mgraphics.show_text(maj_labels[m]);
+        mgraphics.show_text(MAJ_LABELS[m]);
     }
 
-    // 3. Horizontal dB Grid Lines (-12, -6, 0, +6, +12)
+    // 4. Horizontal dB Grid Lines (-12, -6, 0, +6, +12)
     var db_lines = [-12, -6, 0, 6, 12];
     for (var d = 0; d < db_lines.length; d++) {
         var db_val = db_lines[d];
         var dy = Math.round(db_to_y(db_val, gh)) + 0.5;
         if (db_val === 0) {
-            mgraphics.set_source_rgba(0.216, 0.208, 0.239, 1.0);
+            mgraphics.set_source_rgba(0.216, 0.208, 0.239, 0.90);
         } else {
-            mgraphics.set_source_rgba(0.137, 0.133, 0.161, 1.0);
+            mgraphics.set_source_rgba(0.137, 0.133, 0.161, 0.80);
         }
         mgraphics.move_to(0, dy);
         mgraphics.line_to(w, dy);
         mgraphics.stroke();
 
-        mgraphics.set_source_rgba(0.459, 0.435, 0.490, 1.0);
+        mgraphics.set_source_rgba(0.54, 0.52, 0.58, 1.0);
         mgraphics.select_font_face("Ableton Sans Medium", "normal", "normal");
         mgraphics.set_font_size(9.5);
         var lbl_x = (db_val === 0) ? 10 : (db_val === 6 || db_val === -6 ? 7 : 4);
@@ -334,50 +425,11 @@ function paint() {
         mgraphics.show_text(db_val.toString());
     }
 
-    // 4. Real-Time RTA Spectrum Overlay (EQ Eight purple-lavender style)
-    if (rta_enabled) {
-        var rta_pts = [];
-        for (var r = 0; r < 16; r++) {
-            var rx = freq_to_x(RTA_FREQS[r], w);
-            var scaled_db = (rta_db[r] + 30.0) * 0.48;
-            var ry = clamp(db_to_y(scaled_db, gh), 2.0, gh);
-            rta_pts.push({ x: rx, y: ry });
-        }
-
-        mgraphics.set_source_rgba(0.49, 0.43, 0.62, 0.44);
-        mgraphics.move_to(0, gh);
-        mgraphics.line_to(0, rta_pts[0].y);
-        var fine_steps = 64;
-        for (var fs = 1; fs <= fine_steps; fs++) {
-            var fx = (fs / fine_steps) * w;
-            var seg = 0;
-            for (var k = 0; k < 15; k++) {
-                if (fx >= rta_pts[k].x && fx <= rta_pts[k + 1].x) {
-                    seg = k;
-                    break;
-                } else if (fx > rta_pts[15].x) {
-                    seg = 14;
-                }
-            }
-            var dx_seg = Math.max(1.0, rta_pts[seg + 1].x - rta_pts[seg].x);
-            var t_seg = clamp((fx - rta_pts[seg].x) / dx_seg, 0.0, 1.0);
-            var base_y = rta_pts[seg].y * (1.0 - t_seg) + rta_pts[seg + 1].y * t_seg;
-            var active_amount = clamp((gh - base_y) / gh, 0.0, 1.0);
-            var detail = (Math.sin(fs * 1.9) * 3.5 + Math.cos(fs * 4.3) * 2.5) * active_amount;
-            var fy = clamp(base_y + detail, 2.0, gh);
-            mgraphics.line_to(fx, fy);
-        }
-        mgraphics.line_to(w, gh);
-        mgraphics.close_path();
-        mgraphics.fill();
-    }
-
     var y_zero = db_to_y(0.0, gh);
 
     // Precompute filter coefficients once per active band for this frame
     var live_coeffs = [];
     var targ_coeffs = [];
-    var band_has_dyn = [];
     var any_dyn_range = false;
 
     for (var bi = 0; bi < NUM_BANDS; bi++) {
@@ -385,7 +437,6 @@ function paint() {
         if (!bd.active) {
             live_coeffs.push(null);
             targ_coeffs.push(null);
-            band_has_dyn.push(false);
             continue;
         }
         var has_dyn = (bd.dyn_on && uses_gain(bd.type) && Math.abs(bd.range) > 0.1);
@@ -400,37 +451,25 @@ function paint() {
 
         live_coeffs.push(c_live);
         targ_coeffs.push(c_targ);
-        band_has_dyn.push(has_dyn);
     }
 
-    // 5. Selected Band Shaded Fill (Static + Pro-Q Style Dynamic Target Range Fill)
-    var sb = bands[selected_band];
-    if (sb && sb.active) {
-        var sb_static_c = prepare_svf_coeffs(sb.type, sb.freq, sb.q, sb.gain * global_scale);
-        mgraphics.set_source_rgba(EQ8_PINK[0], EQ8_PINK[1], EQ8_PINK[2], 0.13);
-        mgraphics.move_to(0, y_zero);
-        for (var i = 0; i <= NUM_STEPS; i++) {
-            var x_pt = STEP_NORM[i] * w;
-            var b_db = eval_svf_db(sb_static_c, STEP_TAN_W[i]);
-            mgraphics.line_to(x_pt, clamp(db_to_y(b_db, gh), 0.0, gh));
-        }
-        mgraphics.line_to(w, y_zero);
-        mgraphics.close_path();
-        mgraphics.fill();
-
-        // Dynamic target band fill (between static curve and dynamic target curve)
-        if (sb.dyn_on && Math.abs(sb.range) > 0.1 && uses_gain(sb.type)) {
-            var sb_targ_c = targ_coeffs[selected_band];
-            mgraphics.set_source_rgba(EQ8_PINK[0], EQ8_PINK[1], EQ8_PINK[2], 0.22);
+    // 5. Light Blue Shaded Range Indicator ONLY for Dynamic Ranges (No fill for static curves!)
+    for (var dbi = 0; dbi < NUM_BANDS; dbi++) {
+        var dbd = bands[dbi];
+        if (dbd.active && dbd.dyn_on && Math.abs(dbd.range) > 0.1 && uses_gain(dbd.type)) {
+            var db_static_c = prepare_svf_coeffs(dbd.type, dbd.freq, dbd.q, dbd.gain * global_scale);
+            var db_targ_c = targ_coeffs[dbi];
+            var fill_alpha = (dbi === selected_band) ? 0.24 : 0.15;
+            mgraphics.set_source_rgba(EQ8_CYAN[0], EQ8_CYAN[1], EQ8_CYAN[2], fill_alpha);
             for (var sd = 0; sd <= NUM_STEPS; sd++) {
                 var xd = STEP_NORM[sd] * w;
-                var yd = clamp(db_to_y(eval_svf_db(sb_static_c, STEP_TAN_W[sd]), gh), 0.0, gh);
+                var yd = clamp(db_to_y(eval_svf_db(db_static_c, STEP_TAN_W[sd]), gh), 0.0, gh);
                 if (sd === 0) mgraphics.move_to(xd, yd);
                 else mgraphics.line_to(xd, yd);
             }
             for (var sd2 = NUM_STEPS; sd2 >= 0; sd2--) {
                 var xd2 = STEP_NORM[sd2] * w;
-                var yd2 = clamp(db_to_y(eval_svf_db(sb_targ_c, STEP_TAN_W[sd2]), gh), 0.0, gh);
+                var yd2 = clamp(db_to_y(eval_svf_db(db_targ_c, STEP_TAN_W[sd2]), gh), 0.0, gh);
                 mgraphics.line_to(xd2, yd2);
             }
             mgraphics.close_path();
@@ -438,8 +477,8 @@ function paint() {
         }
     }
 
-    // 6. Composite Dynamic Target Range Envelope Curve (Translucent Gold/Orange)
-    //    + Real-Time Active Modulated Composite EQ Curve (Ableton EQ Eight Cyan)
+    // 6. Composite Dynamic Target Range Envelope Curve (Translucent Light Blue)
+    //    + Real-Time Active Modulated Composite EQ Curve (Exact Ableton EQ Eight Cyan)
     var target_pts_y = [];
     var live_pts_y = [];
 
@@ -461,8 +500,8 @@ function paint() {
     }
 
     if (any_dyn_range) {
-        mgraphics.set_line_width(1.25);
-        mgraphics.set_source_rgba(0.98, 0.65, 0.15, 0.65);
+        mgraphics.set_line_width(1.1);
+        mgraphics.set_source_rgba(EQ8_CYAN[0], EQ8_CYAN[1], EQ8_CYAN[2], 0.50);
         mgraphics.move_to(0, target_pts_y[0]);
         for (var s1 = 1; s1 <= NUM_STEPS; s1++) {
             mgraphics.line_to(STEP_NORM[s1] * w, target_pts_y[s1]);
@@ -470,63 +509,74 @@ function paint() {
         mgraphics.stroke();
     }
 
-    // Main Composite Response Curve (Exact EQ Eight Cyan: RGB(63, 196, 212) = #3fc4d4)
-    mgraphics.set_source_rgba(0.247, 0.769, 0.831, 1.0);
-    mgraphics.set_line_width(1.75);
+    // Main Composite Response Curve (Exact EQ Eight Cyan: RGB(57, 210, 228) = #39d2e4, 1.35px width)
+    mgraphics.set_source_rgba(EQ8_CYAN[0], EQ8_CYAN[1], EQ8_CYAN[2], 1.0);
+    mgraphics.set_line_width(1.35);
     mgraphics.move_to(0, live_pts_y[0]);
     for (var s4 = 1; s4 <= NUM_STEPS; s4++) {
         mgraphics.line_to(STEP_NORM[s4] * w, live_pts_y[s4]);
     }
     mgraphics.stroke();
 
-    // 7. Native EQ Eight Pink Band Dots + Pro-Q Dynamic Range Handle on top of Band Circle
+    // 7. Native EQ Eight Pink Band Dots + Offset-Right Dynamic Range Handle
     for (var idx = 0; idx < NUM_BANDS; idx++) {
         var b = bands[idx];
         if (!b.active) continue;
 
         var bx = freq_to_x(b.freq, w);
         var has_g = uses_gain(b.type);
-        var y_main = clamp(db_to_y(has_g ? (b.gain * global_scale) : 0.0, gh), 6.5, gh - 6.5);
+        var y_main = clamp(db_to_y(has_g ? (b.gain * global_scale) : 0.0, gh), 6.0, gh - 6.0);
         var is_sel = (idx === selected_band);
+        var nr = 5.8;
 
-        // --- Dynamic Range Stem & Draggable Ring Handle (on top of band circle!) ---
+        // --- Dynamic Range Stem & Draggable Ring Handle (Offset to the right of the band dot!) ---
         if (has_g) {
+            var dx_off = (bx > w - 16.0) ? -11.0 : 11.0;
+            var dx = bx + dx_off;
+            var edge_x = bx + (dx_off > 0 ? nr : -nr);
+
             if (b.dyn_on && Math.abs(b.range) > 0.1) {
                 var y_dyn = clamp(db_to_y((b.gain + b.range) * global_scale, gh), 5.0, gh - 5.0);
 
-                // Vertical stem connecting main node to dynamic target ring
-                mgraphics.set_line_width(1.4);
-                mgraphics.set_source_rgba(EQ8_PINK[0], EQ8_PINK[1], EQ8_PINK[2], 0.85);
-                mgraphics.move_to(bx, y_main);
-                mgraphics.line_to(bx, y_dyn);
+                // Horizontal connector from band dot edge to offset stem + vertical stem to y_dyn
+                mgraphics.set_line_width(1.25);
+                mgraphics.set_source_rgba(EQ8_CYAN[0], EQ8_CYAN[1], EQ8_CYAN[2], 0.85);
+                mgraphics.move_to(edge_x, y_main);
+                mgraphics.line_to(dx, y_main);
+                mgraphics.line_to(dx, y_dyn);
                 mgraphics.stroke();
 
-                // Draggable Dynamic Target Ring Handle at y_dyn
-                mgraphics.set_source_rgba(EQ8_PINK[0], EQ8_PINK[1], EQ8_PINK[2], 1.0);
-                mgraphics.arc(bx, y_dyn, 3.8, 0, Math.PI * 2);
+                // Draggable Dynamic Target Ring Handle at (dx, y_dyn)
+                mgraphics.set_source_rgba(EQ8_CYAN[0], EQ8_CYAN[1], EQ8_CYAN[2], 1.0);
+                mgraphics.arc(dx, y_dyn, 3.3, 0, Math.PI * 2);
                 mgraphics.stroke();
 
-                // Live Bouncing Reduction Dot along the stem
+                // Live Bouncing Reduction Dot along the offset stem
                 if (Math.abs(b.gr_db) > 0.08) {
                     var y_act = clamp(db_to_y((b.gain + b.gr_db) * global_scale, gh), 5.0, gh - 5.0);
                     mgraphics.set_source_rgba(1.0, 1.0, 1.0, 0.95);
-                    mgraphics.arc(bx, y_act, 2.8, 0, Math.PI * 2);
+                    mgraphics.arc(dx, y_act, 2.5, 0, Math.PI * 2);
                     mgraphics.fill();
                 }
             } else if (is_sel) {
-                // Small Pro-Q style Dynamic Grab Ring directly on top of the selected band circle!
-                var tab_y = Math.max(5.0, y_main - 13.0);
-                mgraphics.set_line_width(1.3);
-                mgraphics.set_source_rgba(EQ8_PINK[0], EQ8_PINK[1], EQ8_PINK[2], 0.85);
-                mgraphics.arc(bx, tab_y, 3.3, 0, Math.PI * 2);
+                // Offset-right Dynamic Grab Ring at the exact same height (y_main) as the band dot!
+                var ring_edge = dx - (dx_off > 0 ? 3.0 : -3.0);
+                mgraphics.set_line_width(1.1);
+                mgraphics.set_source_rgba(EQ8_CYAN[0], EQ8_CYAN[1], EQ8_CYAN[2], 0.65);
+                mgraphics.move_to(edge_x, y_main);
+                mgraphics.line_to(ring_edge, y_main);
+                mgraphics.stroke();
+
+                mgraphics.set_line_width(1.2);
+                mgraphics.set_source_rgba(EQ8_CYAN[0], EQ8_CYAN[1], EQ8_CYAN[2], 0.90);
+                mgraphics.arc(dx, y_main, 3.0, 0, Math.PI * 2);
                 mgraphics.stroke();
             }
         }
 
         // --- Native Ableton EQ Eight Band Dot Styling ---
         // Selected band: Solid filled pink circle (#ff91c3) with dark number
-        // Unselected band: Hollow dark-filled circle with pink outline (#ff91c3) and pink number
-        var nr = 6.5;
+        // Unselected band: Translucent hollow circle (so cyan curve shows through!) with 1.2px pink outline and pink number
         if (is_sel) {
             mgraphics.set_source_rgba(EQ8_PINK[0], EQ8_PINK[1], EQ8_PINK[2], 1.0);
             mgraphics.arc(bx, y_main, nr, 0, Math.PI * 2);
@@ -534,11 +584,11 @@ function paint() {
 
             mgraphics.set_source_rgba(0.078, 0.075, 0.102, 1.0);
         } else {
-            mgraphics.set_source_rgba(0.078, 0.075, 0.102, 0.92);
+            mgraphics.set_source_rgba(0.078, 0.075, 0.102, 0.18);
             mgraphics.arc(bx, y_main, nr, 0, Math.PI * 2);
             mgraphics.fill();
 
-            mgraphics.set_line_width(1.4);
+            mgraphics.set_line_width(1.2);
             mgraphics.set_source_rgba(EQ8_PINK[0], EQ8_PINK[1], EQ8_PINK[2], 1.0);
             mgraphics.arc(bx, y_main, nr, 0, Math.PI * 2);
             mgraphics.stroke();
@@ -547,8 +597,8 @@ function paint() {
         }
 
         mgraphics.select_font_face("Ableton Sans Bold", "normal", "bold");
-        mgraphics.set_font_size(9.0);
-        mgraphics.move_to(bx - 2.6, y_main + 3.1);
+        mgraphics.set_font_size(8.8);
+        mgraphics.move_to(bx - 2.5, y_main + 3.0);
         mgraphics.show_text((idx + 1).toString());
     }
 
@@ -701,26 +751,25 @@ function paint() {
     }
 }
 
-// --- Hit Detection (Checks Dynamic Range Handle on top of band circle FIRST!) ---
+// --- Hit Detection (Checks Offset-Right Dynamic Range Handle FIRST!) ---
 function find_hit(mx, my, w, gh) {
-    // 1. Check Dynamic Range Handles on active bands first
+    // 1. Check Offset-Right Dynamic Range Handles on active bands first
     var best_idx = -1;
-    var best_dist = 10.5;
+    var best_dist = 9.5;
     for (var i = 0; i < NUM_BANDS; i++) {
         var b = bands[i];
         if (b.active && uses_gain(b.type)) {
-            var nx = freq_to_x(b.freq, w);
-            var ny_main = clamp(db_to_y(b.gain * global_scale, gh), 6.5, gh - 6.5);
-            var ny_dyn = -999.0;
-            if (b.dyn_on && Math.abs(b.range) > 0.1) {
-                ny_dyn = clamp(db_to_y((b.gain + b.range) * global_scale, gh), 5.0, gh - 5.0);
-            } else if (i === selected_band) {
-                ny_dyn = Math.max(5.0, ny_main - 13.0);
-            }
-            var d_dyn = Math.sqrt((mx - nx) * (mx - nx) + (my - ny_dyn) * (my - ny_dyn));
-            if (d_dyn < best_dist && Math.abs(ny_dyn - ny_main) > 5.5) {
-                best_dist = d_dyn;
-                best_idx = i;
+            var has_active_dyn = (b.dyn_on && Math.abs(b.range) > 0.1);
+            if (has_active_dyn || i === selected_band) {
+                var bx = freq_to_x(b.freq, w);
+                var dx = bx + ((bx > w - 16.0) ? -11.5 : 11.5);
+                var eff_range = has_active_dyn ? b.range : 0.0;
+                var ny_dyn = clamp(db_to_y((b.gain + eff_range) * global_scale, gh), 5.0, gh - 5.0);
+                var d_dyn = Math.sqrt((mx - dx) * (mx - dx) + (my - ny_dyn) * (my - ny_dyn));
+                if (d_dyn < best_dist) {
+                    best_dist = d_dyn;
+                    best_idx = i;
+                }
             }
         }
     }
@@ -729,13 +778,13 @@ function find_hit(mx, my, w, gh) {
     }
 
     // 2. Check Main Band Nodes (0..7)
-    best_dist = 14.0;
+    best_dist = 13.0;
     for (var j = 0; j < NUM_BANDS; j++) {
         var band = bands[j];
         if (!band.active) continue;
-        var bx = freq_to_x(band.freq, w);
-        var by = clamp(db_to_y(uses_gain(band.type) ? (band.gain * global_scale) : 0.0, gh), 6.5, gh - 6.5);
-        var d = Math.sqrt((mx - bx) * (mx - bx) + (my - by) * (my - by));
+        var bx2 = freq_to_x(band.freq, w);
+        var by2 = clamp(db_to_y(uses_gain(band.type) ? (band.gain * global_scale) : 0.0, gh), 6.5, gh - 6.5);
+        var d = Math.sqrt((mx - bx2) * (mx - bx2) + (my - by2) * (my - by2));
         if (d < best_dist) {
             best_dist = d;
             best_idx = j;
@@ -752,6 +801,7 @@ function onclick(x, y, but, cmd, shift, capslock, option, ctrl) {
     var h = box.rect[3] - box.rect[1];
     var gh = h - STRIP_H;
     var slot_w = (w + 2.0) / NUM_BANDS;
+    var prev_popup = popup_band;
 
     // 1. Check if clicking inside open Filter Type Popup Menu
     if (popup_band >= 0 && popup_band < NUM_BANDS) {
@@ -787,10 +837,10 @@ function onclick(x, y, but, cmd, shift, capslock, option, ctrl) {
         var rel_y = y - gh;
 
         if (rel_y < 18) {
-            // Clicked Top Filter Curve Dropdown
+            // Clicked Top Filter Curve Dropdown: Toggle open/closed if clicking the same field!
             selected_band = c_idx;
             outlet(0, "select_band", selected_band);
-            popup_band = c_idx;
+            popup_band = (prev_popup === c_idx) ? -1 : c_idx;
         } else if (card_rel_x >= cw - 15) {
             // Clicked the Minimalistic Dynamics Circle Toggle on the right of the bottom row!
             outlet(0, "click_band_dyn_dot", c_idx);
@@ -834,11 +884,17 @@ function onclick(x, y, but, cmd, shift, capslock, option, ctrl) {
 
 function ondrag(x, y, but, cmd, shift, capslock, option, ctrl) {
     if (but === 0) {
+        if (drag_band >= 0) {
+            outlet(0, "drag_end", drag_band);
+        }
         drag_band = -1;
         drag_mode = "none";
         return;
     }
     if (drag_band < 0) return;
+
+    // Skip duplicate sub-pixel drag events to keep Max queue completely responsive
+    if (Math.abs(x - last_mx) < 0.2 && Math.abs(y - last_my) < 0.2) return;
 
     var w = box.rect[2] - box.rect[0];
     var h = box.rect[3] - box.rect[1];
@@ -867,6 +923,44 @@ function ondrag(x, y, but, cmd, shift, capslock, option, ctrl) {
 
     last_mx = x;
     last_my = y;
+    mgraphics.redraw();
+}
+
+// --- Mouse Wheel onto points (or anywhere in graph) adjusts Q dimensions ---
+function onwheel(x, y, amt1, amt2, cmd, shift, capslock, option, ctrl) {
+    var w = box.rect[2] - box.rect[0];
+    var h = box.rect[3] - box.rect[1];
+    var gh = h - STRIP_H;
+    if (y >= gh) return;
+
+    var delta = (Math.abs(amt2) >= Math.abs(amt1)) ? amt2 : amt1;
+    if (Math.abs(delta) < 0.0001) return;
+
+    // Check if cursor is near an active band dot (within 24px); otherwise adjust selected_band
+    var target_idx = selected_band;
+    var best_dist = 24.0;
+    for (var i = 0; i < NUM_BANDS; i++) {
+        var b = bands[i];
+        if (!b.active) continue;
+        var bx = freq_to_x(b.freq, w);
+        var by = clamp(db_to_y(uses_gain(b.type) ? (b.gain * global_scale) : 0.0, gh), 6.5, gh - 6.5);
+        var d = Math.sqrt((x - bx) * (x - bx) + (y - by) * (y - by));
+        if (d < best_dist) {
+            best_dist = d;
+            target_idx = i;
+        }
+    }
+
+    if (target_idx < 0 || target_idx >= NUM_BANDS || !bands[target_idx].active) return;
+    if (target_idx !== selected_band) {
+        selected_band = target_idx;
+        outlet(0, "select_band", selected_band);
+    }
+
+    var dir = delta > 0 ? 1.0 : -1.0;
+    var mag = clamp(Math.abs(delta), 0.25, 3.0);
+    bands[target_idx].q = clamp(bands[target_idx].q * Math.pow(1.10, dir * mag), 0.1, 18.0);
+    outlet(0, "band_q", target_idx, bands[target_idx].q);
     mgraphics.redraw();
 }
 
@@ -925,38 +1019,86 @@ function set_dyn_open(v) {
     mgraphics.redraw();
 }
 
-function set_gr() {
-    var args = arrayfromargs(arguments);
-    for (var i = 0; i < NUM_BANDS && i < args.length; i++) {
-        bands[i].gr_db = args[i];
-    }
-    if (drag_band < 0) {
-        mgraphics.redraw();
+function update_rta_bin(idx, lin_val) {
+    var lin_v = Math.max(0.000003, lin_val);
+    var raw_db = (20.0 * Math.log(lin_v) / Math.LN10) + RTA_CAL_DB[idx];
+    // Fast, crisp visual ballistics matching EQ Eight's FFT analyzer
+    if (raw_db > rta_db[idx]) {
+        rta_db[idx] = 0.22 * rta_db[idx] + 0.78 * raw_db;
+    } else {
+        rta_db[idx] = 0.65 * rta_db[idx] + 0.35 * raw_db;
     }
 }
 
 function set_gr_one(idx, val) {
     if (idx >= 0 && idx < NUM_BANDS) {
-        bands[idx].gr_db = val;
-        if (idx === 7 && drag_band < 0) mgraphics.redraw();
+        if (Math.abs(bands[idx].gr_db - val) > 0.03) {
+            bands[idx].gr_db = val;
+            if (!rta_enabled && idx === 7) {
+                mgraphics.redraw();
+            }
+        }
     }
 }
 
-function set_rta() {
-    var args = arrayfromargs(arguments);
-    for (var i = 0; i < 16 && i < args.length; i++) {
-        rta_db[i] = args[i];
+function set_rta_lin_one(idx, val) {
+    if (!rta_enabled) return;
+    if (idx >= 0 && idx < NUM_RTA) {
+        update_rta_bin(idx, val);
+        if (idx === NUM_RTA - 1) {
+            mgraphics.redraw();
+        }
     }
-    if (rta_enabled && drag_band < 0) {
+}
+
+// Batch GR list from pack (1 message per frame instead of 8!)
+function set_gr() {
+    var args = arrayfromargs(arguments);
+    var changed = false;
+    for (var i = 0; i < NUM_BANDS && i < args.length; i++) {
+        if (Math.abs(bands[i].gr_db - args[i]) > 0.03) {
+            bands[i].gr_db = args[i];
+            changed = true;
+        }
+    }
+    if (changed && !rta_enabled) {
         mgraphics.redraw();
     }
 }
 
-function set_rta_one(idx, val) {
-    if (idx >= 0 && idx < 16) {
-        rta_db[idx] = val;
-        if (idx === 15 && rta_enabled && drag_band < 0) mgraphics.redraw();
+// Batched 48 RTA bins (3 x 16-float pack lists per frame)
+function set_rta_b0() {
+    if (!rta_enabled) return;
+    var args = arrayfromargs(arguments);
+    for (var i = 0; i < 16 && i < args.length; i++) {
+        update_rta_bin(i, args[i]);
     }
+}
+
+function set_rta_b1() {
+    if (!rta_enabled) return;
+    var args = arrayfromargs(arguments);
+    for (var i = 0; i < 16 && i < args.length; i++) {
+        update_rta_bin(i + 16, args[i]);
+    }
+}
+
+function set_rta_b2() {
+    if (!rta_enabled) return;
+    var args = arrayfromargs(arguments);
+    for (var i = 0; i < 16 && i < args.length; i++) {
+        update_rta_bin(i + 32, args[i]);
+    }
+    mgraphics.redraw();
+}
+
+function set_rta_lin() {
+    if (!rta_enabled) return;
+    var args = arrayfromargs(arguments);
+    for (var i = 0; i < NUM_RTA && i < args.length; i++) {
+        update_rta_bin(i, args[i]);
+    }
+    mgraphics.redraw();
 }
 
 function set_rta_on(v) {

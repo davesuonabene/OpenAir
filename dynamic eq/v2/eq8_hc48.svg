@@ -1,0 +1,5 @@
+<svg width="24" height="11" viewBox="0 0 24 11" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect x="0" y="0" width="0.1" height="0.1" fill="black" fill-opacity="0.01"/>
+<rect x="23.9" y="10.9" width="0.1" height="0.1" fill="black" fill-opacity="0.01"/>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M16.95 2.75H1.75V1.30H16.95C18.65 1.30 20.00 2.65 20.00 4.35V10.10H18.58V4.35C18.58 3.48 17.85 2.75 16.95 2.75ZM5.20 5.10L6.70 6.65L8.20 5.10L9.00 5.90L7.50 7.45L9.00 9.00L8.20 9.80L6.70 8.25L5.20 9.80L4.40 9.00L5.90 7.45L4.40 5.90L5.20 5.10ZM13.00 4.60H14.00V7.70H14.90V8.70H14.00V9.80H13.00V8.70H10.30V7.70L13.00 4.60ZM13.00 5.90L11.40 7.70H13.00V5.90Z" fill="black"/>
+</svg>

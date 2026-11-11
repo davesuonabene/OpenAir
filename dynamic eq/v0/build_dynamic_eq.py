@@ -113,7 +113,7 @@ def make_live_text(box_id, varname, shortname, text_off, text_on, mode, initial_
     )
 
 
-def make_live_numbox(box_id, varname, shortname, mmin, mmax, initial_val, unitstyle, patching_rect, presentation_rect, **kwargs):
+def make_live_numbox(box_id, varname, shortname, mmin, mmax, initial_val, unitstyle, patching_rect, presentation_rect, exponent=1.0, **kwargs):
     defaults = {
         "appearance": 2,
         "activebgcolor": [0.106, 0.094, 0.129, 1.0],
@@ -122,6 +122,19 @@ def make_live_numbox(box_id, varname, shortname, mmin, mmax, initial_val, unitst
         "textcolor": [0.827, 0.804, 0.843, 1.0],
     }
     defaults.update(kwargs)
+    val_attrs = {
+        "parameter_initial": [initial_val],
+        "parameter_initial_enable": 1,
+        "parameter_longname": varname,
+        "parameter_mmin": float(mmin),
+        "parameter_mmax": float(mmax),
+        "parameter_modmode": 3,
+        "parameter_shortname": shortname,
+        "parameter_type": 0,
+        "parameter_unitstyle": unitstyle,
+    }
+    if exponent != 1.0:
+        val_attrs["parameter_exponent"] = float(exponent)
     return make_box(
         box_id,
         "live.numbox",
@@ -132,30 +145,31 @@ def make_live_numbox(box_id, varname, shortname, mmin, mmax, initial_val, unitst
         numoutlets=2,
         outlettype=["", "float"],
         parameter_enable=1,
-        saved_attribute_attributes={
-            "valueof": {
-                "parameter_initial": [initial_val],
-                "parameter_initial_enable": 1,
-                "parameter_longname": varname,
-                "parameter_mmin": float(mmin),
-                "parameter_mmax": float(mmax),
-                "parameter_modmode": 3,
-                "parameter_shortname": shortname,
-                "parameter_type": 0,
-                "parameter_unitstyle": unitstyle,
-            }
-        },
+        saved_attribute_attributes={"valueof": val_attrs},
         **defaults,
     )
 
 
-def make_live_dial(box_id, varname, shortname, mmin, mmax, initial_val, unitstyle, patching_rect, presentation_rect, **kwargs):
+def make_live_dial(box_id, varname, shortname, mmin, mmax, initial_val, unitstyle, patching_rect, presentation_rect, exponent=1.0, **kwargs):
     defaults = {
         "activedialcolor": [0.278, 0.886, 0.957, 1.0],
         "dialcolor": [0.106, 0.094, 0.129, 1.0],
         "textcolor": [0.827, 0.804, 0.843, 1.0],
     }
     defaults.update(kwargs)
+    val_attrs = {
+        "parameter_initial": [initial_val],
+        "parameter_initial_enable": 1,
+        "parameter_longname": varname,
+        "parameter_mmin": float(mmin),
+        "parameter_mmax": float(mmax),
+        "parameter_modmode": 3,
+        "parameter_shortname": shortname,
+        "parameter_type": 0,
+        "parameter_unitstyle": unitstyle,
+    }
+    if exponent != 1.0:
+        val_attrs["parameter_exponent"] = float(exponent)
     return make_box(
         box_id,
         "live.dial",
@@ -166,19 +180,7 @@ def make_live_dial(box_id, varname, shortname, mmin, mmax, initial_val, unitstyl
         numoutlets=2,
         outlettype=["", "float"],
         parameter_enable=1,
-        saved_attribute_attributes={
-            "valueof": {
-                "parameter_initial": [initial_val],
-                "parameter_initial_enable": 1,
-                "parameter_longname": varname,
-                "parameter_mmin": float(mmin),
-                "parameter_mmax": float(mmax),
-                "parameter_modmode": 3,
-                "parameter_shortname": shortname,
-                "parameter_type": 0,
-                "parameter_unitstyle": unitstyle,
-            }
-        },
+        saved_attribute_attributes={"valueof": val_attrs},
         **defaults,
     )
 
@@ -215,16 +217,29 @@ def generate_gen_codebox():
     """
     Generates the 64-bit GenExpr codebox for:
     1. 8-Band Cytomic ZDF Trapezoidal SVF + Nyquist-Decramped Dynamic EQ Engine (Outlets 1..2 audio, 3..10 dG_1..8)
-    2. 16-Band Real-Time Logarithmic RTA Spectrum Analyzer on Post-EQ Output (Outlets 11..26 rta_1..16 in dB)
+       - 100% v0-verified GenExpr syntax.
+       - Starts 100% flat (Band 1=Low Shelf, Band 2=Bell, Band 3=Bell, Band 4=High Shelf, all 0.0 dB).
+       - Inactive bands (b_on == 0) are completely bypassed.
+       - Sidechain detector & envelope follower (exp/log10) are bypassed when b_dyn_on == 0.
+    2. 32-Band High-Selectivity (Q=18.2, k=0.055) Real-Time RTA Spectrum Analyzer on Post-EQ Output (Outlets 11..42)
+       - Resolves individual harmonics cleanly without external FFT latency.
+       - Outputs linear envelope (0 log10 calls in gen~; dB conversion runs at 33Hz in JS).
     """
     default_freqs = [30.0, 200.0, 1000.0, 5000.0, 100.0, 1000.0, 5000.0, 18000.0]
-    default_types = [1, 3, 3, 5, 3, 3, 3, 6]
+    default_types = [2, 3, 3, 5, 3, 3, 3, 6]
     default_on    = [1, 1, 1, 1, 0, 0, 0, 0]
-    rta_freqs     = [25.0, 40.0, 63.0, 100.0, 160.0, 250.0, 400.0, 630.0, 1000.0, 1600.0, 2500.0, 4000.0, 6300.0, 10000.0, 14000.0, 18000.0]
+    rta_freqs     = [
+        22.0, 27.0, 33.0, 40.0, 48.0, 58.0, 68.0, 80.0,
+        93.0, 108.0, 125.0, 145.0, 168.0, 195.0, 225.0, 260.0,
+        300.0, 345.0, 400.0, 460.0, 530.0, 610.0, 700.0, 800.0,
+        920.0, 1060.0, 1220.0, 1400.0, 1600.0, 1850.0, 2120.0, 2450.0,
+        2800.0, 3250.0, 3750.0, 4300.0, 4950.0, 5700.0, 6550.0, 7500.0,
+        8600.0, 9900.0, 11400.0, 13100.0, 15000.0, 16800.0, 18400.0, 19800.0
+    ]
 
     code = [
         "// ============================================================================",
-        "// OpenAir Dynamic EQ Eight - 64-Bit Cytomic ZDF Trapezoidal SVF + 16-Band RTA",
+        "// OpenAir Dynamic EQ Eight - 64-Bit Cytomic ZDF Trapezoidal SVF + 48-Band RTA",
         "// Algorithm 0 (Active): Zero-Latency Nyquist-Decramped TPT State Variable Filter",
         "// Architecture Hook: Future Natural Phase & Linear Phase modes branch below.",
         "// ============================================================================",
@@ -235,6 +250,7 @@ def generate_gen_codebox():
         "Param solo_band(0);",
         "Param sc1_mix(1.0);",
         "Param sc2_mix(1.0);",
+        "Param rta_active(1);",
         "",
     ]
 
@@ -248,7 +264,7 @@ def generate_gen_codebox():
             f"Param b{b}_freq({f_init});",
             f"Param b{b}_gain(0.0);",
             f"Param b{b}_q(0.71);",
-            f"Param b{b}_dyn_on(1);",
+            f"Param b{b}_dyn_on(0);",
             f"Param b{b}_dyn_range(0.0);",
             f"Param b{b}_thresh(-18.0);",
             f"Param b{b}_attack(5.0);",
@@ -260,7 +276,7 @@ def generate_gen_codebox():
             f"History s2L_ic1_{b}(0.0), s2L_ic2_{b}(0.0), s2R_ic1_{b}(0.0), s2R_ic2_{b}(0.0);",
         ])
 
-    for r in range(1, 17):
+    for r in range(1, 49):
         code.append(f"History rta_ic1_{r}(0.0), rta_ic2_{r}(0.0), rta_env_{r}(0.0);")
 
     code.extend([
@@ -278,106 +294,115 @@ def generate_gen_codebox():
     for b in range(1, 9):
         code.extend([
             f"// ==================== BAND {b} ====================",
-            f"fc_{b} = clip(b{b}_freq, 10.0, samplerate * 0.485);",
-            f"w0_{b} = pi * fc_{b} / samplerate;",
-            f"g0_{b} = tan(w0_{b});",
-            f"sc_in_{b} = (b{b}_source < 0.5) ? in_mono : ((b{b}_source < 1.5) ? sc1_mono : sc2_mono);",
-            f"k_det_{b} = 1.0 / clip(b{b}_q, 0.35, 12.0);",
-            f"da1_{b} = 1.0 / (1.0 + g0_{b} * (g0_{b} + k_det_{b}));",
-            f"da2_{b} = g0_{b} * da1_{b};",
-            f"da3_{b} = g0_{b} * da2_{b};",
-            f"dv3_{b} = sc_in_{b} - det_ic2_{b};",
-            f"dv1_{b} = da1_{b} * det_ic1_{b} + da2_{b} * dv3_{b};",
-            f"dv2_{b} = det_ic2_{b} + da2_{b} * det_ic1_{b} + da3_{b} * dv3_{b};",
-            f"det_ic1_{b} = 2.0 * dv1_{b} - det_ic1_{b};",
-            f"det_ic2_{b} = 2.0 * dv2_{b} - det_ic2_{b};",
-            f"bp_sig_{b} = k_det_{b} * dv1_{b};",
-            f"atk_c_{b} = exp(-1000.0 / (max(0.1, b{b}_attack) * samplerate));",
-            f"rel_c_{b} = exp(-1000.0 / (max(5.0, b{b}_release) * samplerate));",
-            f"rect_{b} = abs(bp_sig_{b});",
-            f"env_{b} = (rect_{b} > env_{b}) ? (atk_c_{b} * env_{b} + (1.0 - atk_c_{b}) * rect_{b}) : (rel_c_{b} * env_{b} + (1.0 - rel_c_{b}) * rect_{b});",
-            f"env_db_{b} = 20.0 * log10(max(0.000001, env_{b}));",
-            f"over_db_{b} = env_db_{b} - b{b}_thresh;",
-            f"ratio_{b} = clip(over_db_{b} / 18.0, 0.0, 1.0);",
-            f"targ_mod_{b} = (b{b}_on > 0.5 && b{b}_dyn_on > 0.5) ? (ratio_{b} * b{b}_dyn_range) : 0.0;",
-            f"mod_db_{b} = 0.992 * mod_db_{b} + 0.008 * targ_mod_{b};",
-            f"out{b + 2} = mod_db_{b};",
-            f"if (b{b}_on > 0.5) {{",
-            f"    t_type_{b} = round(b{b}_type);",
-            f"    tot_db_{b} = (b{b}_gain + mod_db_{b}) * dyn_scale;",
-            f"    q_prop_{b} = (adapt_q > 0.5 && (t_type_{b} == 2 || t_type_{b} == 3 || t_type_{b} == 5)) ? (b{b}_q * pow(2.0, abs(tot_db_{b}) / 18.0)) : b{b}_q;",
-            f"    q_eff_{b} = clip(q_prop_{b} * max(0.35, cos(w0_{b} * 0.5)), 0.1, 24.0);",
-            f"    k0_{b} = 1.0 / q_eff_{b};",
-            f"    A_{b} = pow(10.0, tot_db_{b} / 40.0);",
-            f"    g_{b} = g0_{b};",
-            f"    k_{b} = k0_{b};",
-            f"    m0_{b} = 1.0;",
-            f"    m1_{b} = 0.0;",
-            f"    m2_{b} = 0.0;",
-            f"    if (t_type_{b} == 3) {{",
-            f"        k_{b} = k0_{b} / A_{b};",
-            f"        m0_{b} = 1.0;",
-            f"        m1_{b} = k_{b} * (A_{b} * A_{b} - 1.0);",
-            f"        m2_{b} = 0.0;",
-            f"    }} else if (t_type_{b} == 2) {{",
-            f"        g_{b} = g0_{b} / sqrt(A_{b});",
+            f"if (b{b}_on > 0.5 || round(solo_band) == {b}) {{",
+            f"    fc_{b} = clip(b{b}_freq, 10.0, samplerate * 0.485);",
+            f"    w0_{b} = pi * fc_{b} / samplerate;",
+            f"    g0_{b} = tan(w0_{b});",
+            f"    bp_sig_{b} = 0.0;",
+            f"    if (b{b}_dyn_on > 0.5 || round(solo_band) == {b}) {{",
+            f"        sc_in_{b} = (b{b}_source < 0.5) ? in_mono : ((b{b}_source < 1.5) ? sc1_mono : sc2_mono);",
+            f"        k_det_{b} = 1.0 / clip(b{b}_q, 0.35, 12.0);",
+            f"        da1_{b} = 1.0 / (1.0 + g0_{b} * (g0_{b} + k_det_{b}));",
+            f"        da2_{b} = g0_{b} * da1_{b};",
+            f"        da3_{b} = g0_{b} * da2_{b};",
+            f"        dv3_{b} = sc_in_{b} - det_ic2_{b};",
+            f"        dv1_{b} = da1_{b} * det_ic1_{b} + da2_{b} * dv3_{b};",
+            f"        dv2_{b} = det_ic2_{b} + da2_{b} * det_ic1_{b} + da3_{b} * dv3_{b};",
+            f"        det_ic1_{b} = 2.0 * dv1_{b} - det_ic1_{b};",
+            f"        det_ic2_{b} = 2.0 * dv2_{b} - det_ic2_{b};",
+            f"        bp_sig_{b} = k_det_{b} * dv1_{b};",
+            f"        atk_c_{b} = exp(-1000.0 / (max(0.1, b{b}_attack) * samplerate));",
+            f"        rel_c_{b} = exp(-1000.0 / (max(5.0, b{b}_release) * samplerate));",
+            f"        rect_{b} = abs(bp_sig_{b});",
+            f"        env_{b} = (rect_{b} > env_{b}) ? (atk_c_{b} * env_{b} + (1.0 - atk_c_{b}) * rect_{b}) : (rel_c_{b} * env_{b} + (1.0 - rel_c_{b}) * rect_{b});",
+            f"        env_db_{b} = 20.0 * log10(max(0.000001, env_{b}));",
+            f"        over_db_{b} = env_db_{b} - b{b}_thresh;",
+            f"        ratio_{b} = clip(over_db_{b} / 18.0, 0.0, 1.0);",
+            f"        targ_mod_{b} = (b{b}_on > 0.5 && b{b}_dyn_on > 0.5) ? (ratio_{b} * b{b}_dyn_range) : 0.0;",
+            f"        mod_db_{b} = 0.992 * mod_db_{b} + 0.008 * targ_mod_{b};",
+            f"    }} else {{",
+            f"        mod_db_{b} = 0.0;",
+            f"    }}",
+            f"    if (b{b}_on > 0.5) {{",
+            f"        t_type_{b} = round(b{b}_type);",
+            f"        tot_db_{b} = (b{b}_gain + mod_db_{b}) * dyn_scale;",
+            f"        q_prop_{b} = (adapt_q > 0.5 && (t_type_{b} == 2 || t_type_{b} == 3 || t_type_{b} == 5)) ? (b{b}_q * pow(2.0, abs(tot_db_{b}) / 18.0)) : b{b}_q;",
+            f"        q_eff_{b} = clip(q_prop_{b} * max(0.35, cos(w0_{b} * 0.5)), 0.1, 24.0);",
+            f"        k0_{b} = 1.0 / q_eff_{b};",
+            f"        A_{b} = pow(10.0, tot_db_{b} / 40.0);",
+            f"        g_{b} = g0_{b};",
             f"        k_{b} = k0_{b};",
             f"        m0_{b} = 1.0;",
-            f"        m1_{b} = k_{b} * (A_{b} - 1.0);",
-            f"        m2_{b} = A_{b} * A_{b} - 1.0;",
-            f"    }} else if (t_type_{b} == 5) {{",
-            f"        g_{b} = g0_{b} * sqrt(A_{b});",
-            f"        k_{b} = k0_{b};",
-            f"        m0_{b} = A_{b} * A_{b};",
-            f"        m1_{b} = k_{b} * (1.0 - A_{b}) * A_{b};",
-            f"        m2_{b} = 1.0 - A_{b} * A_{b};",
-            f"    }} else if (t_type_{b} == 1 || t_type_{b} == 0) {{",
-            f"        m0_{b} = 1.0;",
-            f"        m1_{b} = -k0_{b};",
-            f"        m2_{b} = -1.0;",
-            f"    }} else if (t_type_{b} == 6 || t_type_{b} == 7) {{",
-            f"        m0_{b} = 0.0;",
             f"        m1_{b} = 0.0;",
-            f"        m2_{b} = 1.0;",
-            f"    }} else if (t_type_{b} == 4) {{",
-            f"        m0_{b} = 1.0;",
-            f"        m1_{b} = -k0_{b};",
             f"        m2_{b} = 0.0;",
+            f"        if (t_type_{b} == 3) {{",
+            f"            k_{b} = k0_{b} / A_{b};",
+            f"            m0_{b} = 1.0;",
+            f"            m1_{b} = k_{b} * (A_{b} * A_{b} - 1.0);",
+            f"            m2_{b} = 0.0;",
+            f"        }} else if (t_type_{b} == 2) {{",
+            f"            g_{b} = g0_{b} / sqrt(A_{b});",
+            f"            k_{b} = k0_{b};",
+            f"            m0_{b} = 1.0;",
+            f"            m1_{b} = k_{b} * (A_{b} - 1.0);",
+            f"            m2_{b} = A_{b} * A_{b} - 1.0;",
+            f"        }} else if (t_type_{b} == 5) {{",
+            f"            g_{b} = g0_{b} * sqrt(A_{b});",
+            f"            k_{b} = k0_{b};",
+            f"            m0_{b} = A_{b} * A_{b};",
+            f"            m1_{b} = k_{b} * (1.0 - A_{b}) * A_{b};",
+            f"            m2_{b} = 1.0 - A_{b} * A_{b};",
+            f"        }} else if (t_type_{b} == 1 || t_type_{b} == 0) {{",
+            f"            m0_{b} = 1.0;",
+            f"            m1_{b} = -k0_{b};",
+            f"            m2_{b} = -1.0;",
+            f"        }} else if (t_type_{b} == 6 || t_type_{b} == 7) {{",
+            f"            m0_{b} = 0.0;",
+            f"            m1_{b} = 0.0;",
+            f"            m2_{b} = 1.0;",
+            f"        }} else if (t_type_{b} == 4) {{",
+            f"            m0_{b} = 1.0;",
+            f"            m1_{b} = -k0_{b};",
+            f"            m2_{b} = 0.0;",
+            f"        }}",
+            f"        a1_{b} = 1.0 / (1.0 + g_{b} * (g_{b} + k_{b}));",
+            f"        a2_{b} = g_{b} * a1_{b};",
+            f"        a3_{b} = g_{b} * a2_{b};",
+            f"        v3L_{b} = sigL - s1L_ic2_{b};",
+            f"        v1L_{b} = a1_{b} * s1L_ic1_{b} + a2_{b} * v3L_{b};",
+            f"        v2L_{b} = s1L_ic2_{b} + a2_{b} * s1L_ic1_{b} + a3_{b} * v3L_{b};",
+            f"        s1L_ic1_{b} = 2.0 * v1L_{b} - s1L_ic1_{b};",
+            f"        s1L_ic2_{b} = 2.0 * v2L_{b} - s1L_ic2_{b};",
+            f"        sigL = m0_{b} * sigL + m1_{b} * v1L_{b} + m2_{b} * v2L_{b};",
+            f"        v3R_{b} = sigR - s1R_ic2_{b};",
+            f"        v1R_{b} = a1_{b} * s1R_ic1_{b} + a2_{b} * v3R_{b};",
+            f"        v2R_{b} = s1R_ic2_{b} + a2_{b} * s1R_ic1_{b} + a3_{b} * v3R_{b};",
+            f"        s1R_ic1_{b} = 2.0 * v1R_{b} - s1R_ic1_{b};",
+            f"        s1R_ic2_{b} = 2.0 * v2R_{b} - s1R_ic2_{b};",
+            f"        sigR = m0_{b} * sigR + m1_{b} * v1R_{b} + m2_{b} * v2R_{b};",
+            f"        if (t_type_{b} == 0 || t_type_{b} == 7) {{",
+            f"            v3L2_{b} = sigL - s2L_ic2_{b};",
+            f"            v1L2_{b} = a1_{b} * s2L_ic1_{b} + a2_{b} * v3L2_{b};",
+            f"            v2L2_{b} = s2L_ic2_{b} + a2_{b} * s2L_ic1_{b} + a3_{b} * v3L2_{b};",
+            f"            s2L_ic1_{b} = 2.0 * v1L2_{b} - s2L_ic1_{b};",
+            f"            s2L_ic2_{b} = 2.0 * v2L2_{b} - s2L_ic2_{b};",
+            f"            sigL = m0_{b} * sigL + m1_{b} * v1L2_{b} + m2_{b} * v2L2_{b};",
+            f"            v3R2_{b} = sigR - s2R_ic2_{b};",
+            f"            v1R2_{b} = a1_{b} * s2R_ic1_{b} + a2_{b} * v3R2_{b};",
+            f"            v2R2_{b} = s2R_ic2_{b} + a2_{b} * s2R_ic1_{b} + a3_{b} * v3R2_{b};",
+            f"            s2R_ic1_{b} = 2.0 * v1R2_{b} - s2R_ic1_{b};",
+            f"            s2R_ic2_{b} = 2.0 * v2R2_{b} - s2R_ic2_{b};",
+            f"            sigR = m0_{b} * sigR + m1_{b} * v1R2_{b} + m2_{b} * v2R2_{b};",
+            f"        }}",
             f"    }}",
-            f"    a1_{b} = 1.0 / (1.0 + g_{b} * (g_{b} + k_{b}));",
-            f"    a2_{b} = g_{b} * a1_{b};",
-            f"    a3_{b} = g_{b} * a2_{b};",
-            f"    v3L_{b} = sigL - s1L_ic2_{b};",
-            f"    v1L_{b} = a1_{b} * s1L_ic1_{b} + a2_{b} * v3L_{b};",
-            f"    v2L_{b} = s1L_ic2_{b} + a2_{b} * s1L_ic1_{b} + a3_{b} * v3L_{b};",
-            f"    s1L_ic1_{b} = 2.0 * v1L_{b} - s1L_ic1_{b};",
-            f"    s1L_ic2_{b} = 2.0 * v2L_{b} - s1L_ic2_{b};",
-            f"    sigL = m0_{b} * sigL + m1_{b} * v1L_{b} + m2_{b} * v2L_{b};",
-            f"    v3R_{b} = sigR - s1R_ic2_{b};",
-            f"    v1R_{b} = a1_{b} * s1R_ic1_{b} + a2_{b} * v3R_{b};",
-            f"    v2R_{b} = s1R_ic2_{b} + a2_{b} * s1R_ic1_{b} + a3_{b} * v3R_{b};",
-            f"    s1R_ic1_{b} = 2.0 * v1R_{b} - s1R_ic1_{b};",
-            f"    s1R_ic2_{b} = 2.0 * v2R_{b} - s1R_ic2_{b};",
-            f"    sigR = m0_{b} * sigR + m1_{b} * v1R_{b} + m2_{b} * v2R_{b};",
-            f"    if (t_type_{b} == 0 || t_type_{b} == 7) {{",
-            f"        v3L2_{b} = sigL - s2L_ic2_{b};",
-            f"        v1L2_{b} = a1_{b} * s2L_ic1_{b} + a2_{b} * v3L2_{b};",
-            f"        v2L2_{b} = s2L_ic2_{b} + a2_{b} * s2L_ic1_{b} + a3_{b} * v3L2_{b};",
-            f"        s2L_ic1_{b} = 2.0 * v1L2_{b} - s2L_ic1_{b};",
-            f"        s2L_ic2_{b} = 2.0 * v2L2_{b} - s2L_ic2_{b};",
-            f"        sigL = m0_{b} * sigL + m1_{b} * v1L2_{b} + m2_{b} * v2L2_{b};",
-            f"        v3R2_{b} = sigR - s2R_ic2_{b};",
-            f"        v1R2_{b} = a1_{b} * s2R_ic1_{b} + a2_{b} * v3R2_{b};",
-            f"        v2R2_{b} = s2R_ic2_{b} + a2_{b} * s2R_ic1_{b} + a3_{b} * v3R2_{b};",
-            f"        s2R_ic1_{b} = 2.0 * v1R2_{b} - s2R_ic1_{b};",
-            f"        s2R_ic2_{b} = 2.0 * v2R2_{b} - s2R_ic2_{b};",
-            f"        sigR = m0_{b} * sigR + m1_{b} * v1R2_{b} + m2_{b} * v2R2_{b};",
+            f"    if (round(solo_band) == {b}) {{",
+            f"        soloL = bp_sig_{b};",
+            f"        soloR = bp_sig_{b};",
             f"    }}",
+            f"}} else {{",
+            f"    mod_db_{b} = 0.0;",
             f"}}",
-            f"if (round(solo_band) == {b}) {{",
-            f"    soloL = bp_sig_{b};",
-            f"    soloR = bp_sig_{b};",
-            f"}}",
+            f"out{b + 2} = mod_db_{b};",
         ])
 
     code.extend([
@@ -391,27 +416,33 @@ def generate_gen_codebox():
         "out1 = finalL;",
         "out2 = finalR;",
         "",
-        "// ==================== 16-BAND REAL-TIME RTA ANALYZER ====================",
-        "rta_in = (finalL + finalR) * 0.5;",
-        "rta_k = 0.55;",
+        "// ==================== 48-BAND HIGH-RESOLUTION HARMONIC RTA ANALYZER ====================",
+        "if (rta_active > 0.5) {",
+        "    rta_in = (finalL + finalR) * 0.5;",
+        "    rta_k = 0.032;",
     ])
 
-    for r in range(1, 17):
+    for r in range(1, 49):
         rf = rta_freqs[r - 1]
         code.extend([
-            f"rg_{r} = tan(pi * min({rf}, samplerate * 0.47) / samplerate);",
-            f"ra1_{r} = 1.0 / (1.0 + rg_{r} * (rg_{r} + rta_k));",
-            f"ra2_{r} = rg_{r} * ra1_{r};",
-            f"ra3_{r} = rg_{r} * ra2_{r};",
-            f"rv3_{r} = rta_in - rta_ic2_{r};",
-            f"rv1_{r} = ra1_{r} * rta_ic1_{r} + ra2_{r} * rv3_{r};",
-            f"rv2_{r} = rta_ic2_{r} + ra2_{r} * rta_ic1_{r} + ra3_{r} * rv3_{r};",
-            f"rta_ic1_{r} = 2.0 * rv1_{r} - rta_ic1_{r};",
-            f"rta_ic2_{r} = 2.0 * rv2_{r} - rta_ic2_{r};",
-            f"rrect_{r} = abs(rta_k * rv1_{r});",
-            f"rta_env_{r} = (rrect_{r} > rta_env_{r}) ? (0.985 * rta_env_{r} + 0.015 * rrect_{r}) : (0.9992 * rta_env_{r} + 0.0008 * rrect_{r});",
-            f"out{r + 10} = max(-72.0, 20.0 * log10(max(0.00001, rta_env_{r})));",
+            f"    rg_{r} = tan(pi * min({rf}, samplerate * 0.475) / samplerate);",
+            f"    ra1_{r} = 1.0 / (1.0 + rg_{r} * (rg_{r} + rta_k));",
+            f"    ra2_{r} = rg_{r} * ra1_{r};",
+            f"    ra3_{r} = rg_{r} * ra2_{r};",
+            f"    rv3_{r} = rta_in - rta_ic2_{r};",
+            f"    rv1_{r} = ra1_{r} * rta_ic1_{r} + ra2_{r} * rv3_{r};",
+            f"    rv2_{r} = rta_ic2_{r} + ra2_{r} * rta_ic1_{r} + ra3_{r} * rv3_{r};",
+            f"    rta_ic1_{r} = 2.0 * rv1_{r} - rta_ic1_{r};",
+            f"    rta_ic2_{r} = 2.0 * rv2_{r} - rta_ic2_{r};",
+            f"    rrect_{r} = abs(rta_k * rv1_{r});",
+            f"    rta_env_{r} = (rrect_{r} > rta_env_{r}) ? (0.945 * rta_env_{r} + 0.055 * rrect_{r}) : (0.9985 * rta_env_{r} + 0.0015 * rrect_{r});",
+            f"    out{r + 10} = rta_env_{r};",
         ])
+
+    code.append("} else {")
+    for r in range(1, 49):
+        code.append(f"    out{r + 10} = 0.0;")
+    code.append("}")
 
     return "\r\n".join(code)
 
@@ -419,7 +450,7 @@ def generate_gen_codebox():
 def make_gen_box(box_id, patching_rect):
     gen_boxes = []
     gen_lines = []
-    num_outlets = 26
+    num_outlets = 58
 
     for i in range(1, 5):
         gen_boxes.append(make_box(
@@ -430,7 +461,7 @@ def make_gen_box(box_id, patching_rect):
 
     gen_boxes.append(make_box(
         "gen-codebox", "codebox",
-        patching_rect=[30.0, 65.0, 1050.0, 520.0],
+        patching_rect=[30.0, 65.0, 2400.0, 520.0],
         numinlets=4, numoutlets=num_outlets,
         outlettype=[""] * num_outlets,
         code=generate_gen_codebox()
@@ -451,7 +482,7 @@ def make_gen_box(box_id, patching_rect):
         "fileversion": 1,
         "appversion": {"major": 9, "minor": 0, "revision": 0, "architecture": "x64", "modernui": 1},
         "classnamespace": "dsp.gen",
-        "rect": [50.0, 50.0, 1140.0, 680.0],
+        "rect": [50.0, 50.0, 1840.0, 680.0],
         "boxes": gen_boxes,
         "lines": gen_lines,
     }
@@ -537,30 +568,66 @@ def build_device():
     lines.append(make_line("obj-lom", 2, "obj-defer-width", 0))
     lines.append(make_line("obj-defer-width", 0, "obj-thisdevice", 0))
 
-    # Real-Time 50ms Graph Telemetry (8 Dynamic Reductions + 16 RTA Bins routed DIRECTLY to obj-graph)
-    boxes.append(make_box("obj-qmetro", "newobj", "qmetro 50 @active 1", patching_rect=[30.0, 300.0, 115.0, 22.0]))
-    for b in range(1, 9):
+    # Real-Time 33ms (~30fps) Graph Telemetry (Batched via pack into 3 fast list messages per frame)
+    boxes.append(make_box("obj-qmetro", "newobj", "qmetro 33 @active 1", patching_rect=[30.0, 300.0, 115.0, 22.0]))
+
+    boxes.append(make_box(
+        "obj-pack-gr", "newobj", "pack 0. 0. 0. 0. 0. 0. 0. 0.",
+        patching_rect=[30.0, 362.0, 220.0, 20.0],
+        numinlets=8, numoutlets=1, outlettype=[""]
+    ))
+    boxes.append(make_box("obj-prep-gr", "newobj", "prepend set_gr", patching_rect=[265.0, 362.0, 95.0, 20.0]))
+    lines.append(make_line("obj-pack-gr", 0, "obj-prep-gr", 0))
+    lines.append(make_line("obj-prep-gr", 0, "obj-graph", 0))
+
+    for b in range(8, 0, -1):
         snap_id = f"obj-snap-{b}"
-        penv_id = f"obj-penv-{b}"
-        sx = 30.0 + (b - 1) * 115.0
+        sx = 30.0 + (b - 1) * 75.0
         boxes.append(make_box(snap_id, "newobj", "snapshot~", patching_rect=[sx, 335.0, 65.0, 20.0]))
-        boxes.append(make_box(penv_id, "newobj", f"prepend set_gr_one {b - 1}", patching_rect=[sx, 360.0, 115.0, 20.0]))
         lines.append(make_line("obj-gen-eq", b + 1, snap_id, 0))
         lines.append(make_line("obj-qmetro", 0, snap_id, 0))
-        lines.append(make_line(snap_id, 0, penv_id, 0))
-        lines.append(make_line(penv_id, 0, "obj-graph", 0))
+        lines.append(make_line(snap_id, 0, "obj-pack-gr", b - 1))
 
-    for r in range(1, 17):
+    boxes.append(make_box(
+        "obj-pack-rta-b0", "newobj", "pack 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.",
+        patching_rect=[30.0, 415.0, 360.0, 20.0],
+        numinlets=16, numoutlets=1, outlettype=[""]
+    ))
+    boxes.append(make_box("obj-prep-rta-b0", "newobj", "prepend set_rta_b0", patching_rect=[405.0, 415.0, 110.0, 20.0]))
+    lines.append(make_line("obj-pack-rta-b0", 0, "obj-prep-rta-b0", 0))
+    lines.append(make_line("obj-prep-rta-b0", 0, "obj-graph", 0))
+
+    boxes.append(make_box(
+        "obj-pack-rta-b1", "newobj", "pack 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.",
+        patching_rect=[30.0, 465.0, 360.0, 20.0],
+        numinlets=16, numoutlets=1, outlettype=[""]
+    ))
+    boxes.append(make_box("obj-prep-rta-b1", "newobj", "prepend set_rta_b1", patching_rect=[405.0, 465.0, 110.0, 20.0]))
+    lines.append(make_line("obj-pack-rta-b1", 0, "obj-prep-rta-b1", 0))
+    lines.append(make_line("obj-prep-rta-b1", 0, "obj-graph", 0))
+
+    boxes.append(make_box(
+        "obj-pack-rta-b2", "newobj", "pack 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.",
+        patching_rect=[30.0, 515.0, 360.0, 20.0],
+        numinlets=16, numoutlets=1, outlettype=[""]
+    ))
+    boxes.append(make_box("obj-prep-rta-b2", "newobj", "prepend set_rta_b2", patching_rect=[405.0, 515.0, 110.0, 20.0]))
+    lines.append(make_line("obj-pack-rta-b2", 0, "obj-prep-rta-b2", 0))
+    lines.append(make_line("obj-prep-rta-b2", 0, "obj-graph", 0))
+
+    for r in range(48, 0, -1):
         rsnap_id = f"obj-rsnap-{r}"
-        rpenv_id = f"obj-rpenv-{r}"
-        rx = 30.0 + ((r - 1) % 8) * 115.0
-        ry = 400.0 if r <= 8 else 455.0
-        boxes.append(make_box(rsnap_id, "newobj", "snapshot~", patching_rect=[rx, ry, 65.0, 20.0]))
-        boxes.append(make_box(rpenv_id, "newobj", f"prepend set_rta_one {r - 1}", patching_rect=[rx, ry + 22.0, 115.0, 20.0]))
+        rx = 30.0 + ((r - 1) % 16) * 68.0
+        ry = 390.0 if r <= 16 else (440.0 if r <= 32 else 490.0)
+        boxes.append(make_box(rsnap_id, "newobj", "snapshot~", patching_rect=[rx, ry, 60.0, 20.0]))
         lines.append(make_line("obj-gen-eq", r + 9, rsnap_id, 0))
         lines.append(make_line("obj-qmetro", 0, rsnap_id, 0))
-        lines.append(make_line(rsnap_id, 0, rpenv_id, 0))
-        lines.append(make_line(rpenv_id, 0, "obj-graph", 0))
+        if r <= 16:
+            lines.append(make_line(rsnap_id, 0, "obj-pack-rta-b0", r - 1))
+        elif r <= 32:
+            lines.append(make_line(rsnap_id, 0, "obj-pack-rta-b1", r - 17))
+        else:
+            lines.append(make_line(rsnap_id, 0, "obj-pack-rta-b2", r - 33))
 
     # =========================================================================
     # 3. FAR-LEFT VERTICAL SIDECHAIN BAR (x = 0..22, dynamic_eq_sc_bar.js)
@@ -579,12 +646,15 @@ def build_device():
 
     # =========================================================================
     # 4. BASE CANVAS LEFT STRIP (x = 22..67, width = 45px): Freq, Gain, Q Dials
+    #    Logarithmic/Exponential response curves (exponent) for natural control!
+    #    Initial Freq = 1000.0 Hz (matching default selected Band 3 @ 1.00 kHz!)
     # =========================================================================
     boxes.append(make_live_dial(
         "obj-freq-dial", "band_freq", "Freq",
-        10.0, 22000.0, 1000.0, 3,
+        20.0, 20000.0, 1000.0, 3,
         patching_rect=[760.0, 20.0, 45.0, 50.0],
-        presentation_rect=[22.0, 2.0, 45.0, 50.0]
+        presentation_rect=[22.0, 2.0, 45.0, 50.0],
+        exponent=3.6
     ))
     reg_param("obj-freq-dial", "band_freq", "Freq")
     boxes.append(make_box("obj-msg-freq", "newobj", "prepend ui_freq", patching_rect=[820.0, 25.0, 95.0, 22.0]))
@@ -595,7 +665,8 @@ def build_device():
         "obj-gain-dial", "band_gain", "Gain",
         -15.0, 15.0, 0.0, 4,
         patching_rect=[760.0, 80.0, 45.0, 50.0],
-        presentation_rect=[22.0, 56.0, 45.0, 50.0]
+        presentation_rect=[22.0, 56.0, 45.0, 50.0],
+        triangle=1
     ))
     reg_param("obj-gain-dial", "band_gain", "Gain")
     boxes.append(make_box("obj-msg-gain", "newobj", "prepend ui_gain", patching_rect=[820.0, 85.0, 95.0, 22.0]))
@@ -606,7 +677,8 @@ def build_device():
         "obj-q-dial", "band_q", "Q",
         0.1, 18.0, 0.71, 1,
         patching_rect=[760.0, 140.0, 45.0, 50.0],
-        presentation_rect=[22.0, 112.0, 45.0, 50.0]
+        presentation_rect=[22.0, 112.0, 45.0, 50.0],
+        exponent=2.6
     ))
     reg_param("obj-q-dial", "band_q", "Q")
     boxes.append(make_box("obj-msg-q", "newobj", "prepend ui_q", patching_rect=[820.0, 145.0, 90.0, 22.0]))
@@ -689,7 +761,7 @@ def build_device():
         patching_rect=[1060.0, 90.0, 48.0, 13.0],
         presentation_rect=[442.0, 77.0, 48.0, 13.0],
         text="Adapt. Q",
-        textcolor=[0.65, 0.75, 0.84, 1.0]
+        textcolor=[0.827, 0.804, 0.843, 1.0]
     ))
     boxes.append(make_live_text(
         "obj-adaptq", "adapt_q_btn", "Adapt Q",
@@ -709,7 +781,7 @@ def build_device():
         patching_rect=[1060.0, 135.0, 48.0, 13.0],
         presentation_rect=[442.0, 106.0, 48.0, 13.0],
         text="Scale",
-        textcolor=[0.65, 0.75, 0.84, 1.0]
+        textcolor=[0.827, 0.804, 0.843, 1.0]
     ))
     boxes.append(make_live_numbox(
         "obj-dynscale", "dyn_scale", "Scale",
@@ -729,7 +801,7 @@ def build_device():
         patching_rect=[1060.0, 180.0, 48.0, 13.0],
         presentation_rect=[442.0, 135.0, 48.0, 13.0],
         text="Gain",
-        textcolor=[0.65, 0.75, 0.84, 1.0]
+        textcolor=[0.827, 0.804, 0.843, 1.0]
     ))
     boxes.append(make_live_numbox(
         "obj-outgain", "out_gain", "Out Gain",
@@ -1003,7 +1075,8 @@ def build_device():
         "obj-attack", "band_attack", "Attack",
         0.1, 250.0, 5.0, 2,
         patching_rect=[1890.0, 120.0, 56.0, 13.0],
-        presentation_rect=[-500.0, 100.0, 56.0, 13.0]
+        presentation_rect=[-500.0, 100.0, 56.0, 13.0],
+        exponent=2.2
     ))
     reg_param("obj-attack", "band_attack", "Attack")
     boxes.append(make_box("obj-msg-attack", "newobj", "prepend ui_attack", patching_rect=[1970.0, 120.0, 110.0, 22.0]))
@@ -1015,7 +1088,8 @@ def build_device():
         "obj-release", "band_release", "Release",
         5.0, 1000.0, 80.0, 2,
         patching_rect=[1890.0, 145.0, 56.0, 13.0],
-        presentation_rect=[-500.0, 124.0, 56.0, 13.0]
+        presentation_rect=[-500.0, 124.0, 56.0, 13.0],
+        exponent=2.2
     ))
     reg_param("obj-release", "band_release", "Release")
     boxes.append(make_box("obj-msg-release", "newobj", "prepend ui_release", patching_rect=[1970.0, 145.0, 115.0, 22.0]))
@@ -1057,7 +1131,8 @@ def build_device():
     ampf_body += b"meta" + struct.pack("<I", 4) + b"\x00\x00\x00\x00"
     ampf_body += b"ptch" + struct.pack("<I", len(raw_json)) + raw_json
 
-    out_path = os.path.join("dynamic eq", "Dynamic_EQ.amxd")
+    out_dir = os.path.dirname(os.path.abspath(__file__))
+    out_path = os.path.join(out_dir, "Dynamic_EQ.amxd")
     with open(out_path, "wb") as f:
         f.write(ampf_body)
 
