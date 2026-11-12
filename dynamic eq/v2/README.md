@@ -1,58 +1,54 @@
-# OpenAir dEQ Eight (v2 Development Edition)
+# OpenAir dEQ Eight (Alpha v0.03 / v2 Development Edition)
 
-**Device**: `dEQ Eight dev.amxd`  
+**Author**: `macchinette`  
+**Devices**: `dEQ Eight dev.amxd` (unfrozen dev) / `dEQ Eight Alpha v0.03.amxd` (frozen single-file release)  
 **Folder**: `dynamic eq/v2/`  
-**Primary Goal**: Minimize external asset dependencies by leveraging native M4L vector rendering and programmatic SVG recoloring (`remapsvgcolors = 1`).
 
 ---
 
-## 1. Asset Reduction Breakdown
+## 1. Alpha v0.03 Architecture Highlights
 
-In **v1**, 20 external SVG files were required because multiple copies of each icon existed to represent different color states (e.g., `_on` vs `_off`, `_row`, `_full`):
+### A. True Band-Specific Multiband Dynamics (`Int` Mode)
+- **6th-Order (`36 dB/octave`) Stereo ZDF Band Isolator**: When a band's dynamic source is set to **`Int`** (`b_source == 0`), its detector runs 3 cascaded 2-pole Cytomic Trapezoidal SVF stages matched to the band's filter topology:
+  - **Low Shelf / High Cut (`types 2, 6, 7`)**: 6th-order ZDF **Low-Pass** (`-3 dB` aligned to `fc`, `0 dB` passband ripple across sub-bass).
+  - **Bell / Notch (`types 3, 4`)**: 6th-order ZDF **Band-Pass** (`Q` cascade-compensated via `0.35 + 0.52 * Q` for `>50 dB` sub-bass rejection at 1 decade while preserving surgical high-`Q` accuracy).
+  - **High Shelf / Low Cut (`types 5, 0, 1`)**: 6th-order ZDF **High-Pass** (`-3 dB` aligned to `fc`, `0 dB` passband ripple up to Nyquist).
+- **Soft-Knee 1:1 Multiband Compressor Gain Computer**: Smooth `3 dB` quadratic knee around `Threshold` driving a `1:1` hyperbolic range saturator (`norm / sqrt(1 + norm^2)`) scaled by `Dyn Range`.
 
-| Icon Function | v1 External Files (20 total) | v2 Approach (13 total) | Reduction |
-|---|---|---|---|
-| **Dynamics Ring Toggle** | `ableton_dyn_ring_off.svg`<br>`ableton_dyn_ring_on.svg`<br>`ableton_dyn_ring_full.svg` (3 files) | **0 files**. Replaced by native `live.text` circle (`rounded=13.0`, `border=1`). Dynamically recolored in `deq_eight_lom_dev.js` via `bgoncolor` & `bordercolor` messages. | **-3 files** (100% eliminated) |
-| **Headphones Icon** | `ableton_headphones.svg`<br>`ableton_headphones_on.svg`<br>`ableton_headphones_row.svg`<br>`ableton_headphones_row_on.svg` (4 files) | **1 file** (`headphones.svg`). Shared across SC Listen and Solo buttons. Automatically recolored by Max via `remapsvgcolors = 1`. | **-3 files** |
-| **RTA Bars Icon** | `ableton_rta_bars.svg`<br>`ableton_rta_bars_on.svg` (2 files) | **1 file** (`rta_bars.svg`). Single SVG with `remapsvgcolors = 1`. | **-1 file** |
-| **Drawer Arrows** | `ableton_tri_closed.svg`<br>`ableton_tri_open.svg` (2 files) | **2 files** (`tri_closed.svg`, `tri_open.svg`). Standardized with `remapsvgcolors = 1`. | Same (now theme-recolored) |
-| **Vertical Sidechain** | `ableton_sidechain_vert.svg` (1 file) | **1 file** (`sidechain_vert.svg`). Standardized with `remapsvgcolors = 1`. | Same (now theme-recolored) |
-| **Filter Shape Icons** | 8 files (`eq8_*.svg`) | **8 files** (`eq8_*.svg`). | Same |
-| **Total SVGs** | **20 SVG files** | **13 SVG files** | **35% overall reduction** |
+### B. Broadband Signal-Follower External Sidechains (`SC A` / `SC B`)
+- When a band's dynamic source is set to **`SC A`** or **`SC B`** (`b_source == 1, 2`), the detector bypasses the band-isolation filter on the external sidechain (`Mix = 100%`) and follows `max(|SC_L|, |SC_R|)` directly across the full spectrum (e.g., a `50 Hz` kick drum cleanly ducks a `2.5 kHz` vocal presence band).
+- At intermediate `Mix` values (`0% < Mix < 100%`), `gen~` blends the band-isolated internal level with the broadband external sidechain follower.
+
+### C. Lightweight CPU & De-Bloated Max Patcher
+- **Zero-Gain Static Band Bypass**: Enabled Bell/Shelf bands sitting at `0.00 dB` with dynamics off skip per-sample SVF state updates (`0.00%` idle EQ CPU).
+- **`History` Dirty-Checking**: Per-sample `tan()`, `cos()`, `exp()`, and `pow()` transcendental calls are eliminated on steady audio frames; coefficients recompute only when smoothed parameters or sample rate change.
+- **`mute~`-Gated 4096-Point FFT RTA (`p rta_engine`)**: Turning off the RTA button disables 100% of FFT DSP via `mute~` and pauses `qmetro 33` when no dynamic bands are active.
+- **Shared Gain-Reduction Buffer (`buffer~ ---deq_gr`)**: Replaces 8 audio-rate `gen~` outlets + 8 `snapshot~` timers + `pack`, isolating multi-instance memory cleanly via M4L `---` naming.
+- **Real-Time Sample Rate Sync (`dspstate~`)**: Synchronizes `deq_eight_ui_dev.js` FFT bin mapping and SVF curves across `44.1 kHz`, `48 kHz`, `88.2 kHz`, `96 kHz`, and `192 kHz`.
 
 ---
 
-## 2. Programmatic Recoloring Mechanisms
+## 2. Minimal SVG Asset Footprint (`remapsvgcolors = 1`)
 
-### A. Native Vector Dynamics Circle (`rounded = 13.0`)
-Instead of swapping between three SVG files:
-- **OFF State**: Button value = 0. Drawn with transparent background and `live_lcd_frame` border.
-- **ON State (Panel Closed)**: Button value = 1. `bgoncolor` is programmatically set to dark teal (`[0.086, 0.227, 0.259, 1.0]`) with cyan border.
-- **ON State (Panel Open for Band)**: `bgoncolor` is programmatically set to bright cyan (`THEME_COLORS.control_fg`), producing a solid-lit cyan circle toggle with zero SVG dependencies.
-
-### B. `remapsvgcolors = 1`
-All vector SVGs are drawn with `fill="black"` or `stroke="black"`. With `remapsvgcolors = 1`:
-- **State 0 (OFF)**: Max paints `black` with `textcolor` (themed to `live_control_fg`).
-- **State 1 (ON)**: Max paints `black` with `textoncolor` (themed to `live_control_fg_on` / dark text on bright toggle background).
-- Zero hardcoded hex colors; 100% reactive to any Ableton Live 11 / 12 theme.
+All 13 embedded vector icons (`headphones.svg`, `rta_bars.svg`, `dyn_ring.svg`, `tri_closed.svg`, `tri_open.svg`, and `eq8_*.svg`) use pure-black paths dynamically recolored by Max 9's theme engine (`remapsvgcolors = 1`), keeping `dEQ Eight Alpha v0.03.amxd` self-contained and 100% reactive to any Ableton Live 11 / 12 theme.
 
 ---
 
 ## 3. Directory Contents
 
-```
+```text
 dynamic eq/v2/
-├── dEQ Eight dev.amxd         # New v2 Development Max for Live device
-├── build_deq_eight_dev.py     # Automated build script
-├── deq_eight_lom_dev.js       # Native LOM & programmatic color manager
-├── deq_eight_ui_dev.js        # Graph canvas & FFT analyzer
-├── headphones.svg             # Single unified headphones vector icon
-├── rta_bars.svg               # Single unified RTA bars vector icon
-├── tri_closed.svg             # Drawer closed disclosure arrow
-├── tri_open.svg               # Drawer open disclosure arrow
-├── sidechain_vert.svg         # Vertical Sidechain text
-├── eq8_*.svg                  # 8 Filter curve menu icons
-└── README.md                  # This document
+├── dEQ Eight dev.amxd            # Unfrozen v2 development Max for Live device
+├── dEQ Eight Alpha v0.03.amxd    # Frozen single-file production release device
+├── build_deq_eight_dev.py        # Automated patcher + frozen collective + zip builder
+├── deq_eight_lom_dev.js          # Native UI controller, LOM router & pattr persistence
+├── deq_eight_ui_dev.js           # Zero-alloc mgraphics EQ curve + 4096-pt FFT renderer
+├── headphones.svg                # Unified headphones vector icon
+├── rta_bars.svg                  # Unified RTA bars vector icon
+├── dyn_ring.svg                  # Per-band dynamics ring vector icon
+├── tri_closed.svg / tri_open.svg # Sidechain drawer disclosure arrows
+├── eq8_*.svg                     # 8 filter curve menu icons
+└── README.md                     # This document
 ```
 
 ---
@@ -60,7 +56,5 @@ dynamic eq/v2/
 ## 4. Rebuilding from Source
 
 ```bash
-cd "dynamic eq/v2"
-python build_deq_eight_dev.py
+python "dynamic eq/v2/build_deq_eight_dev.py"
 ```
-

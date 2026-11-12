@@ -6,11 +6,17 @@ Author: macchinette
 Isolated Dev Build (`delta/dev/OA_Delta_dev.amxd`):
 - Preserves the exact 248 x 169 px layout, 100% Native Ableton Live dynamic theme tokens,
   and pure phase-cancellation delta circuit (`B - A`).
-- Smart Reference Swap when `Tap` is `No Input` (index 0):
+- Accurate `No Input` Detection via `live.routing` Outlet 3 (`route <none>`):
+  * In Ableton Live's `live.routing`, `"No Input"` sits at the END of the `available_routing_types`
+    list (so its type index is `N - 1 > 0`, NOT `0`). Cycling '74's canonical way to detect
+    `"No Input"` is `route <none>` on Outlet 3 (`available_routing_channels`):
+    - `<none>` matched -> `TapActive = 0` (Noise Reference Mode active automatically!)
+    - channel list matched -> `TapActive = 1` (External Track Tap Mode active!)
+- Smart Reference Swap when `Tap` is `No Input` (`TapActive == 0`):
   * Top-right dropdown (`tap_chan_menu`) populates with `["Pink Noise", "White Noise", "Off"]`
     (reverts to Live's `Pre FX / Post FX / Post Mixer` as soon as a Tap track is selected).
-  * Bottom-right control swaps from `Delay` (ms) to `Ref` (-48.0 .. 0.0 dB, default -24.0 dB)
-    to set the reference noise floor level.
+  * Bottom-right control swaps from `Delay` (ms) to `Ref` (-36.0 .. +6.0 dB, default -6.0 dB)
+    to calibrate the reference noise floor level.
   * Feeds calibrated stereo Pink/White Noise into Reference `A` of the pure delta circuit
     (`Track - Reference`), boosted by `Gain` (0 .. +36 dB) into both the spectrum analyzer
     and `[🎧]` Audition output.
@@ -563,7 +569,7 @@ def build_patcher() -> dict:
         }
     })
 
-    # Contextual Control B (Shown when Tap == No Input): Ref (-48.0 .. 0.0 dB)
+    # Contextual Control B (Shown when Tap == No Input): Ref (-36.0 .. +6.0 dB, default -6.0 dB)
     add_box({
         "id": "obj-lbl-row-ref",
         "maxclass": "live.comment",
@@ -617,10 +623,10 @@ def build_patcher() -> dict:
                 "parameter_longname": "Noise Reference",
                 "parameter_shortname": "Ref",
                 "parameter_type": 0,
-                "parameter_mmin": -48.0,
-                "parameter_mmax": 0.0,
+                "parameter_mmin": -36.0,
+                "parameter_mmax": 6.0,
                 "parameter_initial_enable": 1,
-                "parameter_initial": [-24.0],
+                "parameter_initial": [-6.0],
                 "parameter_unitstyle": 4
             }
         }
@@ -650,7 +656,7 @@ def build_patcher() -> dict:
     })
 
     # =========================================================================
-    # 5. TAP LIVE.ROUTING + SMART NOISE REFERENCE MENU SWAP
+    # 5. TAP LIVE.ROUTING + CANONICAL `<none>` NOISE REFERENCE SWAP
     # =========================================================================
     add_box({
         "id": "obj-thisdevice",
@@ -662,7 +668,7 @@ def build_patcher() -> dict:
         "text": "live.thisdevice"
     })
 
-    add_box({"id": "obj-init-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 3, "outlettype": ["bang", "bang", "bang"], "patching_rect": [480.0, 42.0, 50.0, 22.0], "text": "t b b b"})
+    add_box({"id": "obj-init-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 4, "outlettype": ["bang", "bang", "bang", "bang"], "patching_rect": [480.0, 42.0, 62.0, 22.0], "text": "t b b b b"})
     add_box({"id": "obj-init-p0", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["bang", "int"], "patching_rect": [575.0, 68.0, 38.0, 22.0], "text": "t b 0"})
     add_box({"id": "obj-init-port-cmd", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [575.0, 95.0, 105.0, 22.0], "text": "port audio_inputs"})
 
@@ -708,14 +714,21 @@ def build_patcher() -> dict:
     connect_to_all_rgates("obj-init-p0", 1)
     connect_to_all_rgates("obj-init-p1", 1)
 
-    # Active Tap Track indicator (`Tap > 0`)
-    add_box({"id": "obj-tapa-active", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [220.0, 110.0, 35.0, 22.0], "text": "> 0"})
-    add_line("obj-rgate-type", 0, "obj-tapa-active", 0)
+    # Canonical `TapActive` state (`0` = No Input / Noise Mode, `1` = Track Tap Mode)
+    # Driven by `obj-tapa-chn-rnone` (`route <none>` on `obj-rgate-clist`) AND `umenu` outlet 1 (`route "No Input"`)
+    add_box({"id": "obj-tapa-active", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [220.0, 110.0, 35.0, 22.0], "text": "i 0"})
+    add_box({"id": "obj-msg-tap0", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [220.0, 80.0, 29.5, 22.0], "text": "0"})
+    add_box({"id": "obj-msg-tap1", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [255.0, 80.0, 29.5, 22.0], "text": "1"})
+    add_line("obj-msg-tap0", 0, "obj-tapa-active", 0)
+    add_line("obj-msg-tap1", 0, "obj-tapa-active", 0)
+    # Initialize `TapActive = 0` immediately at load
+    add_line("obj-init-trig", 3, "obj-msg-tap0", 0)
 
-    # Ensure `obj-tapa-active` updates BEFORE `type $1` queries `live.routing`
-    add_box({"id": "obj-trk-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["int", "int"], "patching_rect": [450.0, 300.0, 35.0, 22.0], "text": "t i i"})
-    add_line("obj-ui-menu-track-a", 0, "obj-trk-trig", 0)
-    add_line("obj-trk-trig", 1, "obj-tapa-active", 0)
+    # Also detect user selection on `tap_track_menu` outlet 1 (the item text string) via `route "No Input"`
+    add_box({"id": "obj-trk-rnoin", "maxclass": "newobj", "numinlets": 2, "numoutlets": 2, "outlettype": ["", ""], "patching_rect": [450.0, 295.0, 95.0, 22.0], "text": "route \"No Input\""})
+    add_line("obj-ui-menu-track-a", 1, "obj-trk-rnoin", 0)
+    add_line("obj-trk-rnoin", 0, "obj-msg-tap0", 0)
+    add_line("obj-trk-rnoin", 1, "obj-msg-tap1", 0)
 
     # Track Menu (`tap_track_menu`) Population
     add_box({"id": "obj-tapa-trk-set", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [""], "patching_rect": [450.0, 215.0, 75.0, 22.0], "text": "prepend set"})
@@ -736,11 +749,11 @@ def build_patcher() -> dict:
     add_line("obj-tapa-trk-tlclr", 0, "obj-tapa-trk-iter", 0)
     add_line("obj-tapa-trk-iter", 0, "obj-tapa-trk-app", 0)
     add_line("obj-tapa-trk-app", 0, "obj-ui-menu-track-a", 0)
-    add_line("obj-trk-trig", 0, "obj-tapa-trk-cmd", 0)
+    add_line("obj-ui-menu-track-a", 0, "obj-tapa-trk-cmd", 0)
     add_line("obj-tapa-trk-cmd", 0, "obj-live-routing", 0)
 
     # Channel / Noise Reference Menu (`tap_chan_menu`) Smart Swap
-    # Only let `live.routing`'s channel index update `tap_chan_menu` when `Tap > 0`
+    # Only let `live.routing`'s channel index update `tap_chan_menu` when `TapActive == 1`
     add_box({"id": "obj-gate-chan-set", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [630.0, 215.0, 55.0, 22.0], "text": "gate 1 0"})
     add_box({"id": "obj-tapa-chn-set", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [""], "patching_rect": [630.0, 240.0, 75.0, 22.0], "text": "prepend set"})
     add_line("obj-tapa-active", 0, "obj-gate-chan-set", 0)
@@ -752,38 +765,46 @@ def build_patcher() -> dict:
     add_box({"id": "obj-noise-mode-reg", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [630.0, 325.0, 35.0, 22.0], "text": "i 0"})
 
     add_box({"id": "obj-tapa-chn-rnone", "maxclass": "newobj", "numinlets": 2, "numoutlets": 2, "outlettype": ["", ""], "patching_rect": [645.0, 265.0, 80.0, 22.0], "text": "route <none>"})
-    add_box({"id": "obj-noise-none-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["bang", "bang"], "patching_rect": [645.0, 290.0, 38.0, 22.0], "text": "t b b"})
+    add_box({"id": "obj-noise-none-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 3, "outlettype": ["bang", "bang", "bang"], "patching_rect": [645.0, 290.0, 48.0, 22.0], "text": "t b b b"})
     add_box({
         "id": "obj-noise-menu-fill",
         "maxclass": "message",
         "numinlets": 2,
         "numoutlets": 1,
         "outlettype": [""],
-        "patching_rect": [690.0, 290.0, 295.0, 22.0],
+        "patching_rect": [700.0, 290.0, 295.0, 22.0],
         "text": "clear, append \"Pink Noise\", append \"White Noise\", append Off"
     })
-    add_box({"id": "obj-tapa-chn-tlclr", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["", "clear"], "patching_rect": [735.0, 265.0, 50.0, 22.0], "text": "t l clear"})
+    add_box({"id": "obj-tapa-chn-tlclr", "maxclass": "newobj", "numinlets": 1, "numoutlets": 3, "outlettype": ["", "clear", "bang"], "patching_rect": [735.0, 265.0, 62.0, 22.0], "text": "t l clear b"})
     add_box({"id": "obj-tapa-chn-iter", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [""], "patching_rect": [735.0, 320.0, 27.0, 22.0], "text": "iter"})
     add_box({"id": "obj-tapa-chn-app", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [""], "patching_rect": [735.0, 345.0, 96.0, 22.0], "text": "prepend append"})
 
     add_line("obj-rgate-clist", 0, "obj-tapa-chn-rnone", 0)
-    # When `<none>` arrives (Tap == No Input): populate Noise Reference options & restore selected noise mode
+    # When `<none>` arrives on `clist` (Tap == No Input):
+    # 1. Right outlet (2) sets `TapActive = 0` (`obj-msg-tap0`)
+    # 2. Middle outlet (1) fills `tap_chan_menu` with Pink Noise / White Noise / Off
+    # 3. Left outlet (0) restores `obj-noise-mode-reg` selection & triggers noise generator
     add_line("obj-tapa-chn-rnone", 0, "obj-noise-none-trig", 0)
+    add_line("obj-noise-none-trig", 2, "obj-msg-tap0", 0)
     add_line("obj-noise-none-trig", 1, "obj-noise-menu-fill", 0)
     add_line("obj-noise-menu-fill", 0, "obj-ui-menu-chan-a", 0)
     add_line("obj-noise-none-trig", 0, "obj-noise-mode-reg", 0)
     add_line("obj-noise-mode-reg", 0, "obj-tapa-chn-set", 0)
 
-    # When track channels arrive (Tap > 0): populate Pre FX / Post FX / Post Mixer
+    # When track channels arrive on `clist` (Tap is a valid Track):
+    # 1. Right outlet (2) sets `TapActive = 1` (`obj-msg-tap1`)
+    # 2. Middle outlet (1) clears `tap_chan_menu`
+    # 3. Left outlet (0) appends Pre FX / Post FX / Post Mixer
     add_line("obj-tapa-chn-rnone", 1, "obj-tapa-chn-tlclr", 0)
+    add_line("obj-tapa-chn-tlclr", 2, "obj-msg-tap1", 0)
     add_line("obj-tapa-chn-tlclr", 1, "obj-ui-menu-chan-a", 0)
     add_line("obj-tapa-chn-tlclr", 0, "obj-tapa-chn-iter", 0)
     add_line("obj-tapa-chn-iter", 0, "obj-tapa-chn-app", 0)
     add_line("obj-tapa-chn-app", 0, "obj-ui-menu-chan-a", 0)
 
     # Route user clicks on `tap_chan_menu`:
-    # - Outlet 0 (Tap == 0 -> gate 2 index 1): updates `obj-noise-mode-reg`
-    # - Outlet 1 (Tap > 0  -> gate 2 index 2): sends `channel $1` to `live.routing`
+    # - Outlet 0 (TapActive == 0 -> gate 2 index 1): updates `obj-noise-mode-reg`
+    # - Outlet 1 (TapActive == 1 -> gate 2 index 2): sends `channel $1` to `live.routing`
     add_box({"id": "obj-tap-plus1", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [555.0, 300.0, 32.0, 22.0], "text": "+ 1"})
     add_box({"id": "obj-chan-router", "maxclass": "newobj", "numinlets": 2, "numoutlets": 2, "outlettype": ["", ""], "patching_rect": [555.0, 330.0, 62.0, 22.0], "text": "gate 2 1"})
     add_box({"id": "obj-tapa-chn-cmd", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [555.0, 360.0, 67.0, 22.0], "text": "channel $1"})
@@ -795,13 +816,12 @@ def build_patcher() -> dict:
     add_line("obj-chan-router", 1, "obj-tapa-chn-cmd", 0)
     add_line("obj-tapa-chn-cmd", 0, "obj-live-routing", 0)
 
-    # Contextual Bottom-Right UI Toggle (`Ref` when Tap == 0, `Delay` when Tap > 0)
+    # Contextual Bottom-Right UI Toggle (`Ref` when TapActive == 0, `Delay` when TapActive == 1)
     add_box({"id": "obj-tapa-inv", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [220.0, 250.0, 35.0, 22.0], "text": "== 0"})
     add_box({"id": "obj-msg-hide-del", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [130.0, 275.0, 62.0, 22.0], "text": "hidden $1"})
     add_box({"id": "obj-msg-hide-ref", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [205.0, 275.0, 62.0, 22.0], "text": "hidden $1"})
 
     add_line("obj-tapa-active", 0, "obj-tapa-inv", 0)
-    # When Tap > 0 (`tapa-active == 1`, `tapa-inv == 0`): Delay hidden 0, Ref hidden 1
     add_line("obj-tapa-inv", 0, "obj-msg-hide-del", 0)
     add_line("obj-tapa-active", 0, "obj-msg-hide-ref", 0)
     add_line("obj-msg-hide-del", 0, "obj-lbl-row-delay", 0)
@@ -928,13 +948,12 @@ def build_patcher() -> dict:
     add_line("obj-plugin", 2, "obj-delay-l", 0)
     add_line("obj-plugin", 3, "obj-delay-r", 0)
     add_line("obj-mstosamps", 1, "obj-delay-l", 1)
-    add_line("obj-mstosamps", 1, "obj-mstosamps", 0) if False else None
     add_line("obj-mstosamps", 1, "obj-delay-r", 1)
 
     # =========================================================================
     # 7. STEREO NOISE ENGINE + SMART SWAP WITH TAP INTO PURE DELTA CIRCUIT
     # =========================================================================
-    # Map Noise Mode (0=Pink->1, 1=White->2, 2=Off->0) and gate off when Tap > 0
+    # Map Noise Mode (0=Pink->1, 1=White->2, 2=Off->0) and gate off when TapActive == 1
     add_box({"id": "obj-noise-map", "maxclass": "newobj", "numinlets": 2, "numoutlets": 2, "outlettype": ["", ""], "patching_rect": [30.0, 60.0, 92.0, 22.0], "text": "zl.lookup 1 2 0"})
     add_box({"id": "obj-noise-active-mult", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [30.0, 90.0, 35.0, 22.0], "text": "* 1"})
     add_box({"id": "obj-tapa-inv-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["bang", "int"], "patching_rect": [75.0, 90.0, 35.0, 22.0], "text": "t b i"})
@@ -964,17 +983,17 @@ def build_patcher() -> dict:
     add_line("obj-wtrim-l", 0, "obj-noise-sel-l", 2)
     add_line("obj-wtrim-r", 0, "obj-noise-sel-r", 2)
 
-    # Scale Noise Reference by `Ref` dB (`obj-num-ref`)
+    # Scale Noise Reference by `Ref` dB (`obj-num-ref`, default -6.0 dB -> 0.501)
     add_box({"id": "obj-ref-dbtoa", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [""], "patching_rect": [30.0, 215.0, 41.0, 22.0], "text": "dbtoa"})
-    add_box({"id": "obj-noise-gain-l", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [30.0, 245.0, 48.0, 22.0], "text": "*~ 0.063"})
-    add_box({"id": "obj-noise-gain-r", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [90.0, 245.0, 48.0, 22.0], "text": "*~ 0.063"})
+    add_box({"id": "obj-noise-gain-l", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [30.0, 245.0, 48.0, 22.0], "text": "*~ 0.501"})
+    add_box({"id": "obj-noise-gain-r", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [90.0, 245.0, 48.0, 22.0], "text": "*~ 0.501"})
     add_line("obj-num-ref", 0, "obj-ref-dbtoa", 0)
     add_line("obj-noise-sel-l", 0, "obj-noise-gain-l", 0)
     add_line("obj-noise-sel-r", 0, "obj-noise-gain-r", 0)
     add_line("obj-ref-dbtoa", 0, "obj-noise-gain-l", 1)
     add_line("obj-ref-dbtoa", 0, "obj-noise-gain-r", 1)
 
-    # Track B Gate (`obj-gate-dsp-b-l/r`): Open when `Tap > 0` OR `NoiseActive > 0`
+    # Track B Gate (`obj-gate-dsp-b-l/r`): Open when `TapActive == 1` OR `NoiseActive > 0`
     add_box({"id": "obj-any-active-sum", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [220.0, 115.0, 32.0, 22.0], "text": "+ 1"})
     add_box({"id": "obj-any-active", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [260.0, 115.0, 35.0, 22.0], "text": "> 0"})
     add_box({"id": "obj-noise-trig-b", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["bang", "int"], "patching_rect": [180.0, 115.0, 35.0, 22.0], "text": "t b i"})
@@ -992,8 +1011,8 @@ def build_patcher() -> dict:
     add_line("obj-plugin", 1, "obj-gate-dsp-b-r", 1)
 
     # Reference A Selector (`obj-gate-dsp-a-l/r`, `selector~ 2 1`):
-    # - Inlet 1 (selected when Tap == 0, `tap-plus1 == 1`): Calibrated Stereo Noise (`obj-noise-gain-l/r`)
-    # - Inlet 2 (selected when Tap > 0,  `tap-plus1 == 2`): Delayed Tap (`obj-delay-l/r`)
+    # - Inlet 1 (selected when TapActive == 0, `tap-plus1 == 1`): Calibrated Stereo Noise (`obj-noise-gain-l/r`)
+    # - Inlet 2 (selected when TapActive == 1, `tap-plus1 == 2`): Delayed Tap (`obj-delay-l/r`)
     add_box({"id": "obj-gate-dsp-a-l", "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [370.0, 145.0, 80.0, 22.0], "text": "selector~ 2 1"})
     add_box({"id": "obj-gate-dsp-a-r", "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [455.0, 145.0, 80.0, 22.0], "text": "selector~ 2 1"})
     add_line("obj-tap-plus1", 0, "obj-gate-dsp-a-l", 0)

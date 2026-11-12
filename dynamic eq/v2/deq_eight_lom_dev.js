@@ -22,9 +22,12 @@ var NUM_BANDS = 8;
 var device_ready = 0;
 var state_restored = 0;
 var is_syncing_controls = 0;
+var is_syncing_routing = 0;
 var is_saving_state = 0;
 var save_state_pending = 0;
 var routing_initialized = 0;
+var last_poll_active = -1;
+var last_rta_muted = -1;
 
 var selected_band = 2; // Default selected band = Band 3 (1.00 kHz), matching EQ Eight!
 var sc_panel_open = 0;  // Left Sidechain panel (0 or 1, +154px)
@@ -50,10 +53,14 @@ var sc2_gain = 0.0;
 
 var rt1_type_list = [];
 var rt1_chan_list = [];
+var rt1_type_map = [];
+var rt1_chan_map = [];
 var rt1_cur_type_sym = null;
 var rt1_cur_chan_sym = null;
 var rt2_type_list = [];
 var rt2_chan_list = [];
+var rt2_type_map = [];
+var rt2_chan_map = [];
 var rt2_cur_type_sym = null;
 var rt2_cur_chan_sym = null;
 
@@ -67,6 +74,16 @@ var drag_tick = 0;
 var save_state_task = new Task(function() {
     save_state_now();
 }, this);
+
+function notifydeleted() {
+    if (save_state_task) {
+        save_state_task.cancel();
+    }
+}
+
+function freebang() {
+    notifydeleted();
+}
 
 for (var i = 0; i < NUM_BANDS; i++) {
     bands.push({
@@ -428,6 +445,38 @@ function sync_band_to_ui(idx) {
     sync_band_strip_widgets(idx);
 }
 
+function update_power_gating() {
+    var mute_rta = rta_on ? 0 : 1;
+    if (mute_rta !== last_rta_muted) {
+        var rm = get_box("rta_mute");
+        if (rm) {
+            last_rta_muted = mute_rta;
+            rm.message(mute_rta);
+        }
+    }
+
+    var any_dyn = 0;
+    for (var i = 0; i < NUM_BANDS; i++) {
+        var b = bands[i];
+        var is_g_shape = (b.type === 2 || b.type === 3 || b.type === 5);
+        if (b.active && b.dyn_on && is_g_shape && Math.abs(b.range) > 0.01) {
+            any_dyn = 1;
+            break;
+        }
+    }
+    var need_poll = (rta_on || any_dyn) ? 1 : 0;
+    if (need_poll !== last_poll_active) {
+        var qm = get_box("ui_qmetro");
+        if (qm) {
+            last_poll_active = need_poll;
+            qm.message("active", need_poll);
+            if (!need_poll) {
+                outlet(0, "bang");
+            }
+        }
+    }
+}
+
 function update_solo_dsp() {
     var s_val = 0;
     if (sc_listen) {
@@ -435,6 +484,12 @@ function update_solo_dsp() {
     } else if (solo_band) {
         s_val = selected_band + 1;
     }
+    var b_src = bands[selected_band] ? bands[selected_band].sc_src : 0;
+    var listen_src = 1;
+    if (b_src === 2 || (!sc1_enable && sc2_enable)) {
+        listen_src = 2;
+    }
+    outlet(1, "sc_listen_src", listen_src);
     outlet(1, "solo_band", s_val);
     set_named_val("solo_btn", solo_band);
     set_named_val("sc_listen_btn", sc_listen);
@@ -443,10 +498,14 @@ function update_solo_dsp() {
 }
 
 function update_sc_dsp() {
-    var eff1 = sc1_enable ? clamp(sc1_mix / 100.0, 0.0, 1.0) : 0.0;
-    var eff2 = sc2_enable ? clamp(sc2_mix / 100.0, 0.0, 1.0) : 0.0;
-    outlet(1, "sc1_mix", eff1);
-    outlet(1, "sc2_mix", eff2);
+    var mix1 = clamp(sc1_mix / 100.0, 0.0, 1.0);
+    var mix2 = clamp(sc2_mix / 100.0, 0.0, 1.0);
+    outlet(1, "sc1_en", sc1_enable ? 1 : 0);
+    outlet(1, "sc1_mix", mix1);
+    outlet(1, "sc1_gain", sc1_gain);
+    outlet(1, "sc2_en", sc2_enable ? 1 : 0);
+    outlet(1, "sc2_mix", mix2);
+    outlet(1, "sc2_gain", sc2_gain);
     var sc_act = (sc1_enable || sc2_enable) ? 1 : 0;
     set_box_rect("sc_dot_off", 7.5, 151.0, 6.5, 6.5, sc_act ? 0 : 1);
     set_box_rect("sc_dot_on",  7.5, 151.0, 6.5, 6.5, sc_act ? 1 : 0);
@@ -536,6 +595,7 @@ function sync_all() {
         sync_band_to_ui(i);
     }
     sync_selected_band_controls();
+    update_power_gating();
     query_theme_colors();
 }
 
@@ -546,6 +606,8 @@ function init_device() {
     obj_cache = {};
     rect_cache = {};
     last_device_width = -1;
+    last_poll_active = -1;
+    last_rta_muted = -1;
 
     // Always pull authoritative 104-float state array directly from `pattr eq_state`
     var st_box = get_box("eq_state");
@@ -621,6 +683,7 @@ function ui_band_on(idx, v) {
     bands[idx].active = v ? 1 : 0;
     outlet(1, "b" + (idx + 1) + "_on", bands[idx].active);
     sync_band_to_ui(idx);
+    update_power_gating();
     if (selected_band !== idx) {
         select_band(idx);
     } else {
@@ -640,6 +703,7 @@ function ui_band_type(idx, v) {
         outlet(1, "b" + (b_idx + 1) + "_on", 1);
     }
     sync_band_to_ui(b_idx);
+    update_power_gating();
     if (selected_band !== b_idx) {
         select_band(b_idx);
     } else {
@@ -679,20 +743,31 @@ function ui_rta_on(v) {
     if (!device_ready || is_syncing_controls) return;
     rta_on = v ? 1 : 0;
     outlet(0, "set_rta_on", rta_on);
+    update_power_gating();
     save_state_now();
 }
 
 function ui_solo(v) {
     if (!device_ready || is_syncing_controls) return;
     solo_band = v ? 1 : 0;
+    if (solo_band && sc_listen) {
+        sc_listen = 0;
+    }
+    is_syncing_controls = 1;
     update_solo_dsp();
+    is_syncing_controls = 0;
     save_state_now();
 }
 
 function ui_sc_listen(v) {
     if (!device_ready || is_syncing_controls) return;
     sc_listen = v ? 1 : 0;
+    if (sc_listen && solo_band) {
+        solo_band = 0;
+    }
+    is_syncing_controls = 1;
     update_solo_dsp();
+    is_syncing_controls = 0;
     save_state_now();
 }
 
@@ -700,6 +775,7 @@ function ui_sc_a_en(v) {
     if (!device_ready || is_syncing_controls) return;
     sc1_enable = v ? 1 : 0;
     update_sc_dsp();
+    if (sc_listen) update_solo_dsp();
     save_state_now();
 }
 
@@ -713,6 +789,7 @@ function ui_sc1_mix(v) {
 function ui_sc1_gain(v) {
     if (!device_ready || is_syncing_controls) return;
     sc1_gain = clamp(v, -24.0, 24.0);
+    outlet(1, "sc1_gain", sc1_gain);
     save_state();
 }
 
@@ -720,6 +797,7 @@ function ui_sc_b_en(v) {
     if (!device_ready || is_syncing_controls) return;
     sc2_enable = v ? 1 : 0;
     update_sc_dsp();
+    if (sc_listen) update_solo_dsp();
     save_state_now();
 }
 
@@ -733,102 +811,146 @@ function ui_sc2_mix(v) {
 function ui_sc2_gain(v) {
     if (!device_ready || is_syncing_controls) return;
     sc2_gain = clamp(v, -24.0, 24.0);
+    outlet(1, "sc2_gain", sc2_gain);
     save_state();
 }
 
-// --- Sidechain live.routing Handlers (Matching Official Max 9 `live.routing` Snippet) ---
-function apply_umenu_sym(varname, sym) {
+// --- Sidechain live.routing Handlers (Exact Index-Mapped, Re-Entrancy Guarded) ---
+function apply_umenu_sym(varname, sym, items, idx_map) {
     if (sym === null || sym === undefined) return;
     var menu = get_box(varname);
-    if (!menu) return;
+    if (!menu || !idx_map || idx_map.length === 0) return;
+
+    var ui_idx = -1;
     if (typeof sym === "number") {
-        menu.message("set", sym);
+        for (var i = 0; i < idx_map.length; i++) {
+            if (idx_map[i] === sym) {
+                ui_idx = i;
+                break;
+            }
+        }
     } else {
-        menu.message("setsymbol", sym);
+        for (var j = 0; j < idx_map.length; j++) {
+            var orig = idx_map[j];
+            if (orig >= 0 && orig < items.length && items[orig] === sym) {
+                ui_idx = j;
+                break;
+            }
+        }
+    }
+    if (ui_idx >= 0) {
+        is_syncing_routing = 1;
+        menu.message("set", ui_idx);
+        is_syncing_routing = 0;
     }
 }
 
-function populate_umenu(varname, items, cur_sym) {
+function populate_umenu(varname, items, cur_sym, idx_map) {
     var menu = get_box(varname);
     if (!menu) return;
+    is_syncing_routing = 1;
     menu.message("clear");
-    var count = 0;
+    idx_map.length = 0;
     if (items && items.length > 0) {
         for (var i = 0; i < items.length; i++) {
             if (items[i] !== "<none>") {
                 menu.message("append", items[i]);
-                count++;
+                idx_map.push(i);
             }
         }
     }
-    if (count === 0) {
+    if (idx_map.length === 0) {
         menu.message("append", "No Input");
         menu.message("set", 0);
+        is_syncing_routing = 0;
         return;
     }
+    is_syncing_routing = 0;
     if (cur_sym !== null && cur_sym !== undefined) {
-        apply_umenu_sym(varname, cur_sym);
+        apply_umenu_sym(varname, cur_sym, items, idx_map);
     }
 }
 
 function rt1_types() {
     rt1_type_list = arrayfromargs(arguments);
-    populate_umenu("sc1_track_menu", rt1_type_list, rt1_cur_type_sym);
+    populate_umenu("sc1_track_menu", rt1_type_list, rt1_cur_type_sym, rt1_type_map);
 }
 
 function rt1_chans() {
     rt1_chan_list = arrayfromargs(arguments);
-    populate_umenu("sc1_chan_menu", rt1_chan_list, rt1_cur_chan_sym);
+    populate_umenu("sc1_chan_menu", rt1_chan_list, rt1_cur_chan_sym, rt1_chan_map);
 }
 
 function rt1_cur_type(v) {
     rt1_cur_type_sym = v;
-    apply_umenu_sym("sc1_track_menu", v);
+    apply_umenu_sym("sc1_track_menu", v, rt1_type_list, rt1_type_map);
 }
 
 function rt1_cur_chan(v) {
     rt1_cur_chan_sym = v;
-    apply_umenu_sym("sc1_chan_menu", v);
+    apply_umenu_sym("sc1_chan_menu", v, rt1_chan_list, rt1_chan_map);
 }
 
-function set_sc1_track(idx) {
-    if (!device_ready) return;
-    outlet(3, "type", idx);
+function set_sc1_track(ui_idx) {
+    if (!device_ready || is_syncing_controls || is_syncing_routing) return;
+    var real_idx = (ui_idx >= 0 && ui_idx < rt1_type_map.length) ? rt1_type_map[ui_idx] : ui_idx;
+    outlet(3, "type", real_idx);
+    var chosen = (real_idx >= 0 && real_idx < rt1_type_list.length) ? String(rt1_type_list[real_idx]) : "";
+    if (chosen && chosen !== "No Input" && chosen !== "<none>" && !sc1_enable) {
+        sc1_enable = 1;
+        is_syncing_controls = 1;
+        set_named_val("sc_a_btn", 1);
+        is_syncing_controls = 0;
+        update_sc_dsp();
+        save_state_now();
+    }
 }
 
-function set_sc1_chan(idx) {
-    if (!device_ready) return;
-    outlet(3, "channel", idx);
+function set_sc1_chan(ui_idx) {
+    if (!device_ready || is_syncing_controls || is_syncing_routing) return;
+    var real_idx = (ui_idx >= 0 && ui_idx < rt1_chan_map.length) ? rt1_chan_map[ui_idx] : ui_idx;
+    outlet(3, "channel", real_idx);
 }
 
 function rt2_types() {
     rt2_type_list = arrayfromargs(arguments);
-    populate_umenu("sc2_track_menu", rt2_type_list, rt2_cur_type_sym);
+    populate_umenu("sc2_track_menu", rt2_type_list, rt2_cur_type_sym, rt2_type_map);
 }
 
 function rt2_chans() {
     rt2_chan_list = arrayfromargs(arguments);
-    populate_umenu("sc2_chan_menu", rt2_chan_list, rt2_cur_chan_sym);
+    populate_umenu("sc2_chan_menu", rt2_chan_list, rt2_cur_chan_sym, rt2_chan_map);
 }
 
 function rt2_cur_type(v) {
     rt2_cur_type_sym = v;
-    apply_umenu_sym("sc2_track_menu", v);
+    apply_umenu_sym("sc2_track_menu", v, rt2_type_list, rt2_type_map);
 }
 
 function rt2_cur_chan(v) {
     rt2_cur_chan_sym = v;
-    apply_umenu_sym("sc2_chan_menu", v);
+    apply_umenu_sym("sc2_chan_menu", v, rt2_chan_list, rt2_chan_map);
 }
 
-function set_sc2_track(idx) {
-    if (!device_ready) return;
-    outlet(4, "type", idx);
+function set_sc2_track(ui_idx) {
+    if (!device_ready || is_syncing_controls || is_syncing_routing) return;
+    var real_idx = (ui_idx >= 0 && ui_idx < rt2_type_map.length) ? rt2_type_map[ui_idx] : ui_idx;
+    outlet(4, "type", real_idx);
+    var chosen = (real_idx >= 0 && real_idx < rt2_type_list.length) ? String(rt2_type_list[real_idx]) : "";
+    if (chosen && chosen !== "No Input" && chosen !== "<none>" && !sc2_enable) {
+        sc2_enable = 1;
+        is_syncing_controls = 1;
+        set_named_val("sc_b_btn", 1);
+        is_syncing_controls = 0;
+        update_sc_dsp();
+        save_state_now();
+    }
 }
 
-function set_sc2_chan(idx) {
-    if (!device_ready) return;
-    outlet(4, "channel", idx);
+function set_sc2_chan(ui_idx) {
+    if (!device_ready || is_syncing_controls || is_syncing_routing) return;
+    var real_idx = (ui_idx >= 0 && ui_idx < rt2_chan_map.length) ? rt2_chan_map[ui_idx] : ui_idx;
+    outlet(4, "channel", real_idx);
 }
 
 // --- Handlers from Shared Single-Band Inspector Controls (Left Strip & Right Dynamic Panel) ---
@@ -865,6 +987,7 @@ function ui_type(v) {
     b.type = clamp(Math.round(v), 0, 7);
     outlet(1, "b" + (selected_band + 1) + "_type", b.type);
     sync_band_to_ui(selected_band);
+    update_power_gating();
     save_state_now();
 }
 
@@ -874,6 +997,7 @@ function ui_dyn_on(v) {
     b.dyn_on = v ? 1 : 0;
     outlet(1, "b" + (selected_band + 1) + "_dyn_on", b.dyn_on);
     sync_band_to_ui(selected_band);
+    update_power_gating();
     save_state_now();
 }
 
@@ -891,6 +1015,7 @@ function ui_dyndepth(v) {
     }
     outlet(1, "b" + (selected_band + 1) + "_dyn_range", b.range);
     send_band_to_graph(selected_band);
+    update_power_gating();
     save_state();
 }
 
@@ -924,6 +1049,22 @@ function ui_source(v) {
     var b = bands[selected_band];
     b.sc_src = clamp(Math.round(v), 0, 2);
     outlet(1, "b" + (selected_band + 1) + "_source", b.sc_src);
+    if (b.sc_src === 1 && !sc1_enable) {
+        sc1_enable = 1;
+        is_syncing_controls = 1;
+        set_named_val("sc_a_btn", 1);
+        is_syncing_controls = 0;
+        update_sc_dsp();
+    } else if (b.sc_src === 2 && !sc2_enable) {
+        sc2_enable = 1;
+        is_syncing_controls = 1;
+        set_named_val("sc_b_btn", 1);
+        is_syncing_controls = 0;
+        update_sc_dsp();
+    }
+    if (sc_listen) {
+        update_solo_dsp();
+    }
     save_state_now();
 }
 
@@ -935,7 +1076,7 @@ function select_band(idx) {
     }
     selected_band = next_sel;
     outlet(0, "select", selected_band);
-    if (solo_band) update_solo_dsp();
+    if (solo_band || sc_listen) update_solo_dsp();
     sync_selected_band_controls();
     save_state_now();
 }
@@ -985,6 +1126,7 @@ function band_range(idx, r_val) {
         outlet(1, p + "dyn_on", b.dyn_on);
         sync_band_strip_widgets(idx);
     }
+    update_power_gating();
     if (idx === selected_band) {
         is_syncing_controls = 1;
         set_named_val("band_dyndepth", b.range);
@@ -1016,6 +1158,7 @@ function band_dyn_on(idx, state) {
     bands[idx].dyn_on = state ? 1 : 0;
     outlet(1, "b" + (idx + 1) + "_dyn_on", bands[idx].dyn_on);
     sync_band_strip_widgets(idx);
+    update_power_gating();
     if (idx === selected_band) {
         is_syncing_controls = 1;
         set_named_val("band_dyn_on", bands[idx].dyn_on);
@@ -1029,6 +1172,7 @@ function band_active(idx, state) {
     bands[idx].active = state ? 1 : 0;
     outlet(1, "b" + (idx + 1) + "_on", bands[idx].active);
     sync_band_to_ui(idx);
+    update_power_gating();
     if (idx === selected_band) {
         sync_selected_band_controls();
     }
@@ -1040,5 +1184,6 @@ function band_type(idx, t) {
     bands[idx].type = clamp(Math.round(t), 0, 7);
     outlet(1, "b" + (idx + 1) + "_type", bands[idx].type);
     sync_band_to_ui(idx);
+    update_power_gating();
     save_state_now();
 }

@@ -4,20 +4,25 @@ OpenAir Cultural & Diagnostic Tools — OA_MultibandDifference Generator
 Author: macchinette
 
 Multiband Spectral Excess & Reference Difference Analyzer (`OA_MultibandDifference.amxd`):
+- Canonical `No Input` Detection via `live.routing` Outlet 3 (`route <none>`) + `umenu` Outlet 1 (`route "No Input"`):
+  * In Ableton Live's `live.routing`, `"No Input"` is the LAST item in `available_routing_types`
+    (so its integer index is `N - 1 > 0`, NOT `0`). Detecting `<none>` on Outlet 3 (`available_routing_channels`)
+    reliably sets `TapActive = 0` when `"No Input"` is selected and `TapActive = 1` when a Track is selected.
 - Dual Audition / Analysis Modes on the Bottom-Left:
   1. `[🎧]` (Headphones — `AuditionDelta`):
      Pure time-domain Reference/Delta mode (`Track - Reference`). When `Tap` is `No Input`,
-     auditions the Track against the Pink/White Noise reference bed; when `Tap` is a Track,
-     auditions the phase-cancelled `B - A` delta.
+     auditions the Track against the calibrated stereo Pink/White Noise reference bed.
   2. `[|||]` (Multiband Excess — `AuditionMB`):
-     9-Band Constant-Q Octave Filterbank (`62.5 Hz .. 14 kHz`) Spectral Excess isolator.
-     Compares the Track's per-octave envelope E_B,k(t) against the Reference's per-octave
-     envelope E_A,k(t) (calibrated Pink/White Noise when `No Input`, or the tapped Track when
-     `Tap > 0`) and passes ONLY the frequency bands that poke out above the Reference:
-       G_k(t) = max(0, E_B,k(t) - E_A,k(t)) / (E_B,k(t) + eps)
-- Smart Reference Swap when `Tap` is `No Input`:
-  * Top-right dropdown (`tap_chan_menu`) populates with `["Pink Noise", "White Noise", "Off"]`.
-  * Bottom-right control swaps from `Delay` (0..50 ms) to `Ref` (-48..0 dB, default -24 dB).
+     9-Band Octave Filterbank (`62.5 Hz .. 14 kHz`, `svf~ <fc> 0.25`) Spectral Excess isolator.
+     - In Noise Reference Mode (`Tap == No Input`): compares each octave band's envelope E_B,k(t)
+       against a rock-steady analytical -3 dB/octave Pink Noise ceiling (equal energy per octave band,
+       `T_k = 0.18 * dbtoa(Ref)`) or White Noise ceiling (`+3 dB/oct`, `0.18 * 1.4142**(k-4) * dbtoa(Ref)`).
+     - In Track Tap Mode (`Tap > 0`): compares E_B,k(t) against the live octave-band envelope E_A,k(t)
+       of the tapped reference track.
+     - Passes ONLY the excess energy above the reference threshold:
+         G_k(t) = clip(E_B,k(t) - E_A,k(t), 0, 10) / (E_B,k(t) + 0.0001)
+       Bands at or below the Pink Noise ceiling are completely muted (G_k = 0), so the foreground
+       spectrum curve and `[|||]` Audition cleanly isolate only the bands exceeding the Pink Noise floor.
 """
 
 import json
@@ -628,7 +633,7 @@ def build_patcher() -> dict:
         }
     })
 
-    # Contextual Control B (Shown when Tap == No Input): Ref (-48.0 .. 0.0 dB)
+    # Contextual Control B (Shown when Tap == No Input): Ref (-36.0 .. +12.0 dB, default -6.0 dB)
     add_box({
         "id": "obj-lbl-row-ref",
         "maxclass": "live.comment",
@@ -682,10 +687,10 @@ def build_patcher() -> dict:
                 "parameter_longname": "Noise Reference",
                 "parameter_shortname": "Ref",
                 "parameter_type": 0,
-                "parameter_mmin": -48.0,
-                "parameter_mmax": 0.0,
+                "parameter_mmin": -36.0,
+                "parameter_mmax": 12.0,
                 "parameter_initial_enable": 1,
-                "parameter_initial": [-24.0],
+                "parameter_initial": [-6.0],
                 "parameter_unitstyle": 4
             }
         }
@@ -715,7 +720,7 @@ def build_patcher() -> dict:
     })
 
     # =========================================================================
-    # 5. TAP LIVE.ROUTING + SMART NOISE REFERENCE MENU SWAP
+    # 5. TAP LIVE.ROUTING + CANONICAL `<none>` NOISE REFERENCE SWAP
     # =========================================================================
     add_box({
         "id": "obj-thisdevice",
@@ -727,7 +732,7 @@ def build_patcher() -> dict:
         "text": "live.thisdevice"
     })
 
-    add_box({"id": "obj-init-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 3, "outlettype": ["bang", "bang", "bang"], "patching_rect": [480.0, 42.0, 50.0, 22.0], "text": "t b b b"})
+    add_box({"id": "obj-init-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 4, "outlettype": ["bang", "bang", "bang", "bang"], "patching_rect": [480.0, 42.0, 62.0, 22.0], "text": "t b b b b"})
     add_box({"id": "obj-init-p0", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["bang", "int"], "patching_rect": [575.0, 68.0, 38.0, 22.0], "text": "t b 0"})
     add_box({"id": "obj-init-port-cmd", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [575.0, 95.0, 105.0, 22.0], "text": "port audio_inputs"})
 
@@ -773,12 +778,18 @@ def build_patcher() -> dict:
     connect_to_all_rgates("obj-init-p0", 1)
     connect_to_all_rgates("obj-init-p1", 1)
 
-    add_box({"id": "obj-tapa-active", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [220.0, 110.0, 35.0, 22.0], "text": "> 0"})
-    add_line("obj-rgate-type", 0, "obj-tapa-active", 0)
+    # Canonical `TapActive` state (`0` = No Input / Noise Mode, `1` = Track Tap Mode)
+    add_box({"id": "obj-tapa-active", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [220.0, 110.0, 35.0, 22.0], "text": "i 0"})
+    add_box({"id": "obj-msg-tap0", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [220.0, 80.0, 29.5, 22.0], "text": "0"})
+    add_box({"id": "obj-msg-tap1", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [255.0, 80.0, 29.5, 22.0], "text": "1"})
+    add_line("obj-msg-tap0", 0, "obj-tapa-active", 0)
+    add_line("obj-msg-tap1", 0, "obj-tapa-active", 0)
+    add_line("obj-init-trig", 3, "obj-msg-tap0", 0)
 
-    add_box({"id": "obj-trk-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["int", "int"], "patching_rect": [450.0, 300.0, 35.0, 22.0], "text": "t i i"})
-    add_line("obj-ui-menu-track-a", 0, "obj-trk-trig", 0)
-    add_line("obj-trk-trig", 1, "obj-tapa-active", 0)
+    add_box({"id": "obj-trk-rnoin", "maxclass": "newobj", "numinlets": 2, "numoutlets": 2, "outlettype": ["", ""], "patching_rect": [450.0, 295.0, 95.0, 22.0], "text": "route \"No Input\""})
+    add_line("obj-ui-menu-track-a", 1, "obj-trk-rnoin", 0)
+    add_line("obj-trk-rnoin", 0, "obj-msg-tap0", 0)
+    add_line("obj-trk-rnoin", 1, "obj-msg-tap1", 0)
 
     # Track Menu (`tap_track_menu`) Population
     add_box({"id": "obj-tapa-trk-set", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [""], "patching_rect": [450.0, 215.0, 75.0, 22.0], "text": "prepend set"})
@@ -799,7 +810,7 @@ def build_patcher() -> dict:
     add_line("obj-tapa-trk-tlclr", 0, "obj-tapa-trk-iter", 0)
     add_line("obj-tapa-trk-iter", 0, "obj-tapa-trk-app", 0)
     add_line("obj-tapa-trk-app", 0, "obj-ui-menu-track-a", 0)
-    add_line("obj-trk-trig", 0, "obj-tapa-trk-cmd", 0)
+    add_line("obj-ui-menu-track-a", 0, "obj-tapa-trk-cmd", 0)
     add_line("obj-tapa-trk-cmd", 0, "obj-live-routing", 0)
 
     # Channel / Noise Reference Menu (`tap_chan_menu`) Smart Swap
@@ -813,28 +824,30 @@ def build_patcher() -> dict:
     add_box({"id": "obj-noise-mode-reg", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [630.0, 325.0, 35.0, 22.0], "text": "i 0"})
 
     add_box({"id": "obj-tapa-chn-rnone", "maxclass": "newobj", "numinlets": 2, "numoutlets": 2, "outlettype": ["", ""], "patching_rect": [645.0, 265.0, 80.0, 22.0], "text": "route <none>"})
-    add_box({"id": "obj-noise-none-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["bang", "bang"], "patching_rect": [645.0, 290.0, 38.0, 22.0], "text": "t b b"})
+    add_box({"id": "obj-noise-none-trig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 3, "outlettype": ["bang", "bang", "bang"], "patching_rect": [645.0, 290.0, 48.0, 22.0], "text": "t b b b"})
     add_box({
         "id": "obj-noise-menu-fill",
         "maxclass": "message",
         "numinlets": 2,
         "numoutlets": 1,
         "outlettype": [""],
-        "patching_rect": [690.0, 290.0, 295.0, 22.0],
+        "patching_rect": [700.0, 290.0, 295.0, 22.0],
         "text": "clear, append \"Pink Noise\", append \"White Noise\", append Off"
     })
-    add_box({"id": "obj-tapa-chn-tlclr", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["", "clear"], "patching_rect": [735.0, 265.0, 50.0, 22.0], "text": "t l clear"})
+    add_box({"id": "obj-tapa-chn-tlclr", "maxclass": "newobj", "numinlets": 1, "numoutlets": 3, "outlettype": ["", "clear", "bang"], "patching_rect": [735.0, 265.0, 62.0, 22.0], "text": "t l clear b"})
     add_box({"id": "obj-tapa-chn-iter", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [""], "patching_rect": [735.0, 320.0, 27.0, 22.0], "text": "iter"})
     add_box({"id": "obj-tapa-chn-app", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [""], "patching_rect": [735.0, 345.0, 96.0, 22.0], "text": "prepend append"})
 
     add_line("obj-rgate-clist", 0, "obj-tapa-chn-rnone", 0)
     add_line("obj-tapa-chn-rnone", 0, "obj-noise-none-trig", 0)
+    add_line("obj-noise-none-trig", 2, "obj-msg-tap0", 0)
     add_line("obj-noise-none-trig", 1, "obj-noise-menu-fill", 0)
     add_line("obj-noise-menu-fill", 0, "obj-ui-menu-chan-a", 0)
     add_line("obj-noise-none-trig", 0, "obj-noise-mode-reg", 0)
     add_line("obj-noise-mode-reg", 0, "obj-tapa-chn-set", 0)
 
     add_line("obj-tapa-chn-rnone", 1, "obj-tapa-chn-tlclr", 0)
+    add_line("obj-tapa-chn-tlclr", 2, "obj-msg-tap1", 0)
     add_line("obj-tapa-chn-tlclr", 1, "obj-ui-menu-chan-a", 0)
     add_line("obj-tapa-chn-tlclr", 0, "obj-tapa-chn-iter", 0)
     add_line("obj-tapa-chn-iter", 0, "obj-tapa-chn-app", 0)
@@ -851,7 +864,7 @@ def build_patcher() -> dict:
     add_line("obj-chan-router", 1, "obj-tapa-chn-cmd", 0)
     add_line("obj-tapa-chn-cmd", 0, "obj-live-routing", 0)
 
-    # Contextual Bottom-Right UI Toggle (`Ref` when Tap == 0, `Delay` when Tap > 0)
+    # Contextual Bottom-Right UI Toggle (`Ref` when TapActive == 0, `Delay` when TapActive == 1)
     add_box({"id": "obj-tapa-inv", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [220.0, 250.0, 35.0, 22.0], "text": "== 0"})
     add_box({"id": "obj-msg-hide-del", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [130.0, 275.0, 62.0, 22.0], "text": "hidden $1"})
     add_box({"id": "obj-msg-hide-ref", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [205.0, 275.0, 62.0, 22.0], "text": "hidden $1"})
@@ -1017,15 +1030,15 @@ def build_patcher() -> dict:
     add_line("obj-wtrim-r", 0, "obj-noise-sel-r", 2)
 
     add_box({"id": "obj-ref-dbtoa", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [""], "patching_rect": [30.0, 215.0, 41.0, 22.0], "text": "dbtoa"})
-    add_box({"id": "obj-noise-gain-l", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [30.0, 245.0, 48.0, 22.0], "text": "*~ 0.063"})
-    add_box({"id": "obj-noise-gain-r", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [90.0, 245.0, 48.0, 22.0], "text": "*~ 0.063"})
+    add_box({"id": "obj-noise-gain-l", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [30.0, 245.0, 48.0, 22.0], "text": "*~ 0.501"})
+    add_box({"id": "obj-noise-gain-r", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [90.0, 245.0, 48.0, 22.0], "text": "*~ 0.501"})
     add_line("obj-num-ref", 0, "obj-ref-dbtoa", 0)
     add_line("obj-noise-sel-l", 0, "obj-noise-gain-l", 0)
     add_line("obj-noise-sel-r", 0, "obj-noise-gain-r", 0)
     add_line("obj-ref-dbtoa", 0, "obj-noise-gain-l", 1)
     add_line("obj-ref-dbtoa", 0, "obj-noise-gain-r", 1)
 
-    # Track B Gate (`obj-gate-dsp-b-l/r`): Open when `Tap > 0` OR `NoiseActive > 0`
+    # Track B Gate (`obj-gate-dsp-b-l/r`): Open when `TapActive == 1` OR `NoiseActive > 0`
     add_box({"id": "obj-any-active-sum", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [220.0, 115.0, 32.0, 22.0], "text": "+ 1"})
     add_box({"id": "obj-any-active", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [260.0, 115.0, 35.0, 22.0], "text": "> 0"})
     add_box({"id": "obj-noise-trig-b", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["bang", "int"], "patching_rect": [180.0, 115.0, 35.0, 22.0], "text": "t b i"})
@@ -1069,18 +1082,33 @@ def build_patcher() -> dict:
 
     # =========================================================================
     # 9. PATH 2: 9-BAND OCTAVE MULTIBAND SPECTRAL EXCESS ENGINE FOR `[|||]`
-    #    Isolates per-octave components of B that exceed Reference A:
-    #      G_k(t) = clip(E_B,k(t) - E_A,k(t), 0, 10) / (E_B,k(t) + 0.00001)
+    #    - In Noise Reference Mode (`TapActive == 0`): uses an exact, rock-steady
+    #      analytical per-octave Pink Noise threshold `T_k = 0.18 * dbtoa(Ref)`
+    #      (equal energy per octave band) or White Noise threshold
+    #      `T_k = 0.18 * (1.4142 ** (k - 4)) * dbtoa(Ref)` so there is zero random
+    #      low-frequency noise wobble.
+    #    - In Track Tap Mode (`TapActive == 1`): uses the live octave-band envelope
+    #      of the delayed Tap track (`obj-delay-l/r`).
+    #    - Passes ONLY the excess amplitude above the reference threshold:
+    #        G_k(t) = clip(E_B,k(t) - E_A,k(t), 0, 10) / (E_B,k(t) + 0.0001)
     # =========================================================================
-    add_box({"id": "obj-mb-ref-mono", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [1050.0, 40.0, 42.0, 22.0], "text": "*~ 0.5"})
-    add_line("obj-gate-dsp-a-l", 0, "obj-mb-ref-mono", 0)
-    add_line("obj-gate-dsp-a-r", 0, "obj-mb-ref-mono", 0)
+    add_box({"id": "obj-mb-tap-mono", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [1050.0, 40.0, 42.0, 22.0], "text": "*~ 0.5"})
+    add_line("obj-delay-l", 0, "obj-mb-tap-mono", 0)
+    add_line("obj-delay-r", 0, "obj-mb-tap-mono", 0)
 
-    add_box({"id": "obj-mb-sum-l", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [1050.0, 720.0, 45.0, 22.0], "text": "*~ 1.35"})
-    add_box({"id": "obj-mb-sum-r", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [1120.0, 720.0, 45.0, 22.0], "text": "*~ 1.35"})
+    # Analytical Pink Noise per-octave base threshold (equal across all 1-octave bands)
+    add_box({"id": "obj-mb-pink-sig", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [960.0, 40.0, 62.0, 22.0], "text": "sig~ 0.18"})
+    add_box({"id": "obj-mb-pink-thr", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [960.0, 70.0, 52.0, 22.0], "text": "*~ 0.501"})
+    add_line("obj-mb-pink-sig", 0, "obj-mb-pink-thr", 0)
+    add_line("obj-ref-dbtoa", 0, "obj-mb-pink-thr", 1)
+
+    add_box({"id": "obj-mb-sum-l", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [1050.0, 740.0, 45.0, 22.0], "text": "*~ 0.75"})
+    add_box({"id": "obj-mb-sum-r", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [1120.0, 740.0, 45.0, 22.0], "text": "*~ 0.75"})
 
     for idx_b, fc in enumerate(OCTAVE_BANDS):
-        bx = 1050.0 + idx_b * 110.0
+        bx = 1050.0 + idx_b * 115.0
+        white_coeff = round(0.18 * (1.41421356 ** (idx_b - 4)), 5)
+
         svf_bl = f"obj-mb-b{idx_b}-svf-l"
         svf_br = f"obj-mb-b{idx_b}-svf-r"
         svf_a  = f"obj-mb-b{idx_b}-svf-a"
@@ -1088,8 +1116,14 @@ def build_patcher() -> dict:
         abs_br = f"obj-mb-b{idx_b}-abs-r"
         avg_b  = f"obj-mb-b{idx_b}-avg-b"
         env_b  = f"obj-mb-b{idx_b}-env-b"
-        abs_a  = f"obj-mb-b{idx_b}-abs-a"
-        env_a  = f"obj-mb-b{idx_b}-env-a"
+
+        wsig_id = f"obj-mb-b{idx_b}-wsig"
+        wthr_id = f"obj-mb-b{idx_b}-wthr"
+        nthr_id = f"obj-mb-b{idx_b}-nthr"
+        abs_a   = f"obj-mb-b{idx_b}-abs-a"
+        env_a   = f"obj-mb-b{idx_b}-env-a"
+        rsel_id = f"obj-mb-b{idx_b}-rsel"
+
         diff_e = f"obj-mb-b{idx_b}-diff"
         clip_e = f"obj-mb-b{idx_b}-clip"
         eps_b  = f"obj-mb-b{idx_b}-eps"
@@ -1098,48 +1132,68 @@ def build_patcher() -> dict:
         out_l  = f"obj-mb-b{idx_b}-out-l"
         out_r  = f"obj-mb-b{idx_b}-out-r"
 
-        add_box({"id": svf_bl, "maxclass": "newobj", "numinlets": 3, "numoutlets": 4, "outlettype": ["signal", "signal", "signal", "signal"], "patching_rect": [bx, 80.0, 95.0, 22.0], "text": f"svf~ {fc} 0.55"})
-        add_box({"id": svf_br, "maxclass": "newobj", "numinlets": 3, "numoutlets": 4, "outlettype": ["signal", "signal", "signal", "signal"], "patching_rect": [bx, 110.0, 95.0, 22.0], "text": f"svf~ {fc} 0.55"})
-        add_box({"id": svf_a,  "maxclass": "newobj", "numinlets": 3, "numoutlets": 4, "outlettype": ["signal", "signal", "signal", "signal"], "patching_rect": [bx, 140.0, 95.0, 22.0], "text": f"svf~ {fc} 0.55"})
+        # Non-resonant Butterworth Q (0.25) 1-octave bandpass filters
+        add_box({"id": svf_bl, "maxclass": "newobj", "numinlets": 3, "numoutlets": 4, "outlettype": ["signal", "signal", "signal", "signal"], "patching_rect": [bx, 80.0, 95.0, 22.0], "text": f"svf~ {fc} 0.25"})
+        add_box({"id": svf_br, "maxclass": "newobj", "numinlets": 3, "numoutlets": 4, "outlettype": ["signal", "signal", "signal", "signal"], "patching_rect": [bx, 110.0, 95.0, 22.0], "text": f"svf~ {fc} 0.25"})
+        add_box({"id": svf_a,  "maxclass": "newobj", "numinlets": 3, "numoutlets": 4, "outlettype": ["signal", "signal", "signal", "signal"], "patching_rect": [bx, 140.0, 95.0, 22.0], "text": f"svf~ {fc} 0.25"})
 
         add_box({"id": abs_bl, "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 175.0, 38.0, 22.0], "text": "abs~"})
         add_box({"id": abs_br, "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx + 45.0, 175.0, 38.0, 22.0], "text": "abs~"})
         add_box({"id": avg_b,  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 205.0, 42.0, 22.0], "text": "*~ 0.5"})
-        add_box({"id": env_b,  "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 235.0, 102.0, 22.0], "text": "rampsmooth~ 64 2048"})
+        add_box({"id": env_b,  "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 235.0, 105.0, 22.0], "text": "rampsmooth~ 128 2048"})
 
-        add_box({"id": abs_a,  "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 265.0, 38.0, 22.0], "text": "abs~"})
-        add_box({"id": env_a,  "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 295.0, 105.0, 22.0], "text": "rampsmooth~ 512 4096"})
+        # Analytical White Noise threshold for band k + selector between Pink (1) and White (2)
+        add_box({"id": wsig_id, "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 265.0, 78.0, 22.0], "text": f"sig~ {white_coeff}"})
+        add_box({"id": wthr_id, "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 292.0, 52.0, 22.0], "text": "*~ 0.501"})
+        add_box({"id": nthr_id, "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 320.0, 80.0, 22.0], "text": "selector~ 2 1"})
 
-        add_box({"id": diff_e, "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 330.0, 35.0, 22.0], "text": "-~"})
-        add_box({"id": clip_e, "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 360.0, 68.0, 22.0], "text": "clip~ 0. 10."})
-        add_box({"id": eps_b,  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 390.0, 75.0, 22.0], "text": "+~ 0.00001"})
-        add_box({"id": div_g,  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 420.0, 35.0, 22.0], "text": "/~"})
-        add_box({"id": smoo_g, "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 450.0, 98.0, 22.0], "text": "rampsmooth~ 64 512"})
+        # Live Tap Track envelope for band k (used when TapActive == 1)
+        add_box({"id": abs_a,   "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 350.0, 38.0, 22.0], "text": "abs~"})
+        add_box({"id": env_a,   "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 378.0, 105.0, 22.0], "text": "rampsmooth~ 128 2048"})
+        add_box({"id": rsel_id, "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 408.0, 80.0, 22.0], "text": "selector~ 2 1"})
 
-        add_box({"id": out_l,  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 485.0, 38.0, 22.0], "text": "*~"})
-        add_box({"id": out_r,  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx + 45.0, 485.0, 38.0, 22.0], "text": "*~"})
+        add_box({"id": diff_e, "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 440.0, 35.0, 22.0], "text": "-~"})
+        add_box({"id": clip_e, "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 470.0, 68.0, 22.0], "text": "clip~ 0. 10."})
+        add_box({"id": eps_b,  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 500.0, 75.0, 22.0], "text": "+~ 0.0001"})
+        add_box({"id": div_g,  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 530.0, 35.0, 22.0], "text": "/~"})
+        add_box({"id": smoo_g, "maxclass": "newobj", "numinlets": 3, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 560.0, 105.0, 22.0], "text": "rampsmooth~ 128 1024"})
+
+        add_box({"id": out_l,  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx, 595.0, 38.0, 22.0], "text": "*~"})
+        add_box({"id": out_r,  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["signal"], "patching_rect": [bx + 45.0, 595.0, 38.0, 22.0], "text": "*~"})
 
         add_line("obj-gate-dsp-b-l", 0, svf_bl, 0)
         add_line("obj-gate-dsp-b-r", 0, svf_br, 0)
-        add_line("obj-mb-ref-mono",  0, svf_a,  0)
+        add_line("obj-mb-tap-mono",  0, svf_a,  0)
 
-        # Outlet 2 of `svf~` is bandpass
+        # Track Bandpass envelope
         add_line(svf_bl, 2, abs_bl, 0)
         add_line(svf_br, 2, abs_br, 0)
         add_line(abs_bl, 0, avg_b, 0)
         add_line(abs_br, 0, avg_b, 0)
         add_line(avg_b,  0, env_b, 0)
 
-        add_line(svf_a,  2, abs_a, 0)
-        add_line(abs_a,  0, env_a, 0)
+        # Analytical Noise Threshold vs Live Tap Envelope
+        add_line(wsig_id, 0, wthr_id, 0)
+        add_line("obj-ref-dbtoa", 0, wthr_id, 1)
+        add_line("obj-noise-active-mult", 0, nthr_id, 0)
+        add_line("obj-mb-pink-thr", 0, nthr_id, 1)
+        add_line(wthr_id, 0, nthr_id, 2)
 
-        add_line(env_b,  0, diff_e, 0)
-        add_line(env_a,  0, diff_e, 1)
-        add_line(diff_e, 0, clip_e, 0)
-        add_line(env_b,  0, eps_b,  0)
-        add_line(clip_e, 0, div_g,  0)
-        add_line(eps_b,  0, div_g,  1)
-        add_line(div_g,  0, smoo_g, 0)
+        add_line(svf_a, 2, abs_a, 0)
+        add_line(abs_a, 0, env_a, 0)
+
+        add_line("obj-tap-plus1", 0, rsel_id, 0)
+        add_line(nthr_id, 0, rsel_id, 1)
+        add_line(env_a,   0, rsel_id, 2)
+
+        # Excess calculation: max(0, E_B - E_Ref) / (E_B + 0.0001)
+        add_line(env_b,   0, diff_e, 0)
+        add_line(rsel_id, 0, diff_e, 1)
+        add_line(diff_e,  0, clip_e, 0)
+        add_line(env_b,   0, eps_b,  0)
+        add_line(clip_e,  0, div_g,  0)
+        add_line(eps_b,   0, div_g,  1)
+        add_line(div_g,   0, smoo_g, 0)
 
         add_line(svf_bl, 2, out_l, 0)
         add_line(svf_br, 2, out_r, 0)
@@ -1171,7 +1225,6 @@ def build_patcher() -> dict:
     add_line("obj-mb-sel1", 0, "obj-msg-set0-aud", 0)
     add_line("obj-msg-set0-aud", 0, "obj-btn-audition", 0)
 
-    # Track current active state of both buttons cleanly
     add_box({"id": "obj-reg-aud",  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [30.0, 425.0, 35.0, 22.0], "text": "i 0"})
     add_box({"id": "obj-reg-mb",   "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [80.0, 425.0, 35.0, 22.0], "text": "i 0"})
     add_box({"id": "obj-zero-mb",  "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [""], "patching_rect": [125.0, 425.0, 29.5, 22.0], "text": "0"})
@@ -1184,11 +1237,8 @@ def build_patcher() -> dict:
     add_line("obj-aud-trig", 0, "obj-reg-aud", 0)
     add_line("obj-mb-trig", 0, "obj-reg-mb", 0)
 
-    # Difference Engine Selector (`obj-diff-engine-sel-l/r`, `selector~ 2 2`):
-    # - Inlet 1: Pure Time-Domain Delta (`obj-sum-delta-l/r`) — selected when `[🎧]` is ON (`reg-aud == 1`)
-    # - Inlet 2: 9-Band Multiband Excess (`obj-mb-sum-l/r`) — selected when `[|||]` is ON or both OFF (`reg-aud == 0`)
-    add_box({"id": "obj-aud-inv-sel", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [30.0, 450.0, 35.0, 22.0], "text": "== 0"})
-    add_box({"id": "obj-eng-idx",     "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [30.0, 480.0, 35.0, 22.0], "text": "+ 1"})
+    add_box({"id": "obj-aud-inv-sel", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [30.0, 455.0, 35.0, 22.0], "text": "== 0"})
+    add_box({"id": "obj-eng-idx",     "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [30.0, 485.0, 35.0, 22.0], "text": "+ 1"})
     add_line("obj-reg-aud", 0, "obj-aud-inv-sel", 0)
     add_line("obj-aud-inv-sel", 0, "obj-eng-idx", 0)
 
@@ -1216,12 +1266,10 @@ def build_patcher() -> dict:
     add_line("obj-boost-mult-l", 0, "obj-limiter-delta", 0)
     add_line("obj-boost-mult-r", 0, "obj-limiter-delta", 1)
 
-    # Output Audition Selector (`plugout~ 1/2`):
-    # Active (inlet 2) when EITHER `[🎧]` (`reg-aud`) OR `[|||]` (`reg-mb`) is ON; Dry (inlet 1) when both OFF
-    add_box({"id": "obj-mb-trig-or",  "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["bang", "int"], "patching_rect": [80.0, 450.0, 35.0, 22.0], "text": "t b i"})
-    add_box({"id": "obj-aud-any-sum", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [80.0, 480.0, 35.0, 22.0], "text": "+ 0"})
-    add_box({"id": "obj-aud-any-gt0", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [80.0, 510.0, 35.0, 22.0], "text": "> 0"})
-    add_box({"id": "obj-mode-plus1",  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [80.0, 540.0, 35.0, 22.0], "text": "+ 1"})
+    add_box({"id": "obj-mb-trig-or",  "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": ["bang", "int"], "patching_rect": [80.0, 455.0, 35.0, 22.0], "text": "t b i"})
+    add_box({"id": "obj-aud-any-sum", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [80.0, 485.0, 35.0, 22.0], "text": "+ 0"})
+    add_box({"id": "obj-aud-any-gt0", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [80.0, 515.0, 35.0, 22.0], "text": "> 0"})
+    add_box({"id": "obj-mode-plus1",  "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": ["int"], "patching_rect": [80.0, 545.0, 35.0, 22.0], "text": "+ 1"})
 
     add_line("obj-reg-mb", 0, "obj-mb-trig-or", 0)
     add_line("obj-mb-trig-or", 1, "obj-aud-any-sum", 1)
