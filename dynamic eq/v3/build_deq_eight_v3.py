@@ -600,7 +600,7 @@ def generate_gen_codebox():
             f"History prev_freq_{b}(-1.0), g0_c_{b}(0.05), nyq_c_{b}(1.0);",
             f"History prev_det_f_{b}(-1.0), prev_det_q_{b}(-1.0), prev_det_t_{b}(-1);",
             f"History da1_{b}(0.0), da2_{b}(0.0), da3_{b}(0.0), dm0_{b}(0.0), dm1_{b}(1.0), dm2_{b}(0.0);",
-            f"History prev_atk_{b}(-1.0), atk_c_{b}(0.99), prev_rel_{b}(-1.0), rel_c_{b}(0.999);",
+            f"History prev_atk_{b}(-1.0), atk_c_{b}(0.99), prev_rel_{b}(-1.0), rel_c_{b}(0.999), prev_thr_{b}(-999.0), thr_flr_{b}(0.06);",
             f"History d1L_ic1_{b}(0.0), d1L_ic2_{b}(0.0), d1R_ic1_{b}(0.0), d1R_ic2_{b}(0.0);",
             f"History d2L_ic1_{b}(0.0), d2L_ic2_{b}(0.0), d2R_ic1_{b}(0.0), d2R_ic2_{b}(0.0);",
             f"History d3L_ic1_{b}(0.0), d3L_ic2_{b}(0.0), d3R_ic1_{b}(0.0), d3R_ic2_{b}(0.0);",
@@ -741,6 +741,10 @@ def generate_gen_codebox():
             f"                rel_c_{b} = exp(-1000.0 / (max(5.0, b{b}_release) * samplerate));",
             f"                prev_rel_{b} = b{b}_release;",
             f"            }}",
+            f"            if (abs(b{b}_thresh - prev_thr_{b}) > 0.001) {{",
+            f"                thr_flr_{b} = exp((b{b}_thresh - 1.5) * 0.11512925464970229);",
+            f"                prev_thr_{b} = b{b}_thresh;",
+            f"            }}",
             f"            rect_{b} = det_int_{b};",
             f"            if (src_{b} == 1) {{",
             f"                rect_{b} = (sc1_en > 0.5) ? ((1.0 - sc1_mix) * det_int_{b} + sc1_mix * ext_a_peak) : 0.0;",
@@ -748,13 +752,16 @@ def generate_gen_codebox():
             f"                rect_{b} = (sc2_en > 0.5) ? ((1.0 - sc2_mix) * det_int_{b} + sc2_mix * ext_b_peak) : 0.0;",
             f"            }}",
             f"            env_{b} = fixdenorm((rect_{b} > env_{b}) ? (atk_c_{b} * env_{b} + (1.0 - atk_c_{b}) * rect_{b}) : (rel_c_{b} * env_{b} + (1.0 - rel_c_{b}) * rect_{b}));",
-            f"            env_db_{b} = log(max(0.000001, env_{b})) * 8.685889638065035;",
-            f"            over_db_{b} = env_db_{b} - b{b}_thresh;",
-            f"            knee_over_{b} = (over_db_{b} <= -1.5) ? 0.0 : ((over_db_{b} < 1.5) ? ((over_db_{b} + 1.5) * (over_db_{b} + 1.5) * 0.16666666666666666) : over_db_{b});",
-            f"            max_r_{b} = max(0.001, abs(b{b}_dyn_range));",
-            f"            norm_over_{b} = knee_over_{b} / max_r_{b};",
-            f"            curve_{b} = norm_over_{b} / sqrt(1.0 + norm_over_{b} * norm_over_{b});",
-            f"            target_mod_{b} = (knee_over_{b} > 0.0 && abs(b{b}_dyn_range) > 0.01) ? (b{b}_dyn_range * curve_{b}) : 0.0;",
+            f"            target_mod_{b} = 0.0;",
+            f"            if (env_{b} > thr_flr_{b}) {{",
+            f"                env_db_{b} = log(max(0.000001, env_{b})) * 8.685889638065035;",
+            f"                over_db_{b} = env_db_{b} - b{b}_thresh;",
+            f"                knee_over_{b} = (over_db_{b} <= -1.5) ? 0.0 : ((over_db_{b} < 1.5) ? ((over_db_{b} + 1.5) * (over_db_{b} + 1.5) * 0.16666666666666666) : over_db_{b});",
+            f"                max_r_{b} = max(0.001, abs(b{b}_dyn_range));",
+            f"                norm_over_{b} = knee_over_{b} / max_r_{b};",
+            f"                curve_{b} = norm_over_{b} / sqrt(1.0 + norm_over_{b} * norm_over_{b});",
+            f"                target_mod_{b} = (knee_over_{b} > 0.0) ? (b{b}_dyn_range * curve_{b}) : 0.0;",
+            f"            }}",
             f"            mod_db_{b} = fixdenorm(0.990 * mod_db_{b} + 0.010 * target_mod_{b});",
             f"        }} else {{",
             f"            env_{b} = 0.0;",
@@ -776,7 +783,7 @@ def generate_gen_codebox():
             f"        }} else {{",
             f"            eq_bypassed_{b} = 0;",
             f"            aq_flag_{b} = (adapt_q > 0.5) ? 1 : 0;",
-            f"            if (sr_changed || abs(freq_sm_{b} - prev_eq_f_{b}) > 0.005 || abs(tot_gain_{b} - prev_eq_g_{b}) > 0.0005 || abs(b{b}_q - prev_eq_q_{b}) > 0.0005 || t_{b} != prev_eq_t_{b} || aq_flag_{b} != prev_eq_aq_{b}) {{",
+            f"            if (sr_changed || abs(freq_sm_{b} - prev_eq_f_{b}) > 0.005 || abs(tot_gain_{b} - prev_eq_g_{b}) > 0.004 || abs(b{b}_q - prev_eq_q_{b}) > 0.0005 || t_{b} != prev_eq_t_{b} || aq_flag_{b} != prev_eq_aq_{b}) {{",
             f"                q_base_{b} = clip(b{b}_q, 0.1, 18.0);",
             f"                q_eff_{b} = (aq_flag_{b} == 1 && is_gain_shape_{b}) ? clip(q_base_{b} * exp(abs(tot_gain_{b}) * 0.03850817669777474), 0.1, 18.0) : q_base_{b};",
             f"                k_eq_{b} = 1.0 / (q_eff_{b} * nyq_c_{b});",
@@ -927,19 +934,20 @@ def build_gen_patcher():
 
 def build_rta_fft_gen_patcher():
     """
-    Phase-Immune Stereo Power 4096-Point Hann FFT Extractor (`L + jR` -> `sqrt(|Z_hann[k]|^2 + |Z_hann[4096-k]|^2) / 2048`):
+    Phase-Immune Stereo Power 4096-Point Hann FFT Extractor (`L + jR` -> `(|Z_hann[k]|^2 + |Z_hann[4096-k]|^2) / 2048^2`):
+    - Zero `sqrt()` on the real-time audio thread (pure multiply-add FPU math!).
     - Eliminates `(L + R) * 0.5` high-frequency stereo phase cancellation completely using a single `fft~ 4096 4096 0`.
-    - Writes all 2048 Hann-windowed bins `0 .. 2047` (including DC bin `0`) into `buffer~ ---rta_fft`.
+    - Writes all 2048 Hann-windowed power bins `0 .. 2047` + `frame_seq` at `[2048]` into `buffer~ ---rta_fft`.
     """
     rta_code = "\r\n".join([
         "Data z_re(2049);",
         "Data z_im(2049);",
         "History r1(0.0), r2(0.0), i1(0.0), i2(0.0);",
         "History z0_re(0.0), z0_im(0.0), z1_re(0.0), z1_im(0.0);",
-        "History saved_dc(0.0), has_frame(0);",
+        "History saved_dc(0.0), has_frame(0), frame_seq(0);",
         "",
-        "m = round(in3);",
-        "mag = 0.0;",
+        "m = int(in3 + 0.5);",
+        "pwr = 0.0;",
         "idx = -1;",
         "if (m == 0) {",
         "    if (has_frame > 0) {",
@@ -947,17 +955,17 @@ def build_rta_fft_gen_patcher():
         "        ih_n = 0.5 * i1 - 0.25 * (i2 + z0_im);",
         "        rh_p = peek(z_re, 1, 0);",
         "        ih_p = peek(z_im, 1, 0);",
-        "        mag = sqrt(rh_p * rh_p + ih_p * ih_p + rh_n * rh_n + ih_n * ih_n) * (1.0 / 2048.0);",
+        "        pwr = (rh_p * rh_p + ih_p * ih_p + rh_n * rh_n + ih_n * ih_n) * 0.0000002384185791015625;",
         "        idx = 1;",
         "        dc_r = 0.5 * z0_re - 0.25 * (r1 + z1_re);",
         "        dc_i = 0.5 * z0_im - 0.25 * (i1 + z1_im);",
-        "        saved_dc = sqrt(dc_r * dc_r + dc_i * dc_i) * (1.4142135623730951 / 4096.0);",
+        "        saved_dc = (dc_r * dc_r + dc_i * dc_i) * 0.00000011920928955078125;",
         "    }",
         "    z0_re = in1;",
         "    z0_im = in2;",
         "} else if (m == 1) {",
         "    if (has_frame > 0) {",
-        "        mag = saved_dc;",
+        "        pwr = saved_dc;",
         "        idx = 0;",
         "    }",
         "    z1_re = in1;",
@@ -968,13 +976,18 @@ def build_rta_fft_gen_patcher():
         "    ih_s = 0.5 * i1 - 0.25 * (i2 + in2);",
         "    poke(z_re, rh_s, k_st, 0);",
         "    poke(z_im, ih_s, k_st, 0);",
+        "    if (m == 2 && has_frame > 0) {",
+        "        frame_seq = (frame_seq >= 1048576) ? 1 : (frame_seq + 1);",
+        "        pwr = frame_seq;",
+        "        idx = 2048;",
+        "    }",
         "} else if (m >= 2050 && m <= 4095) {",
         "    k_pos = 4097 - m;",
         "    rh_n2 = 0.5 * r1 - 0.25 * (r2 + in1);",
         "    ih_n2 = 0.5 * i1 - 0.25 * (i2 + in2);",
         "    rh_p2 = peek(z_re, k_pos, 0);",
         "    ih_p2 = peek(z_im, k_pos, 0);",
-        "    mag = sqrt(rh_p2 * rh_p2 + ih_p2 * ih_p2 + rh_n2 * rh_n2 + ih_n2 * ih_n2) * (1.0 / 2048.0);",
+        "    pwr = (rh_p2 * rh_p2 + ih_p2 * ih_p2 + rh_n2 * rh_n2 + ih_n2 * ih_n2) * 0.0000002384185791015625;",
         "    idx = k_pos;",
         "    if (m == 4095) {",
         "        has_frame = 1;",
@@ -982,7 +995,7 @@ def build_rta_fft_gen_patcher():
         "}",
         "r2 = r1; r1 = in1;",
         "i2 = i1; i1 = in2;",
-        "out1 = mag;",
+        "out1 = pwr;",
         "out2 = idx;",
     ])
     return {
@@ -1113,7 +1126,7 @@ def build_device():
 
     boxes.append(make_box("obj-rta-mute", "newobj", "mute~", varname="rta_mute", patching_rect=[250.0, 405.0, 48.0, 22.0], numinlets=1, numoutlets=1, outlettype=[""]))
     boxes.append(make_box("obj-rta-sub", "newobj", "p rta_engine", patching_rect=[140.0, 440.0, 115.0, 22.0], numinlets=3, numoutlets=0, outlettype=[], patcher=build_rta_subpatcher()))
-    boxes.append(make_box("obj-rta-buf", "newobj", "buffer~ ---rta_fft @samps 2048", patching_rect=[265.0, 440.0, 185.0, 22.0], numinlets=1, numoutlets=2, outlettype=["float", "bang"]))
+    boxes.append(make_box("obj-rta-buf", "newobj", "buffer~ ---rta_fft @samps 2049", patching_rect=[265.0, 440.0, 185.0, 22.0], numinlets=1, numoutlets=2, outlettype=["float", "bang"]))
     lines.append(make_line("obj-gen-eq", 0, "obj-rta-sub", 0))
     lines.append(make_line("obj-gen-eq", 1, "obj-rta-sub", 1))
     lines.append(make_line("obj-rta-mute", 0, "obj-rta-sub", 2))
@@ -1184,8 +1197,41 @@ def build_device():
     lines.append(make_line("obj-lc-route", 1, "obj-lc-prep", 0))
     lines.append(make_line("obj-lc-prep", 0, "obj-lom", 0))
 
-    boxes.append(make_box("obj-qmetro", "newobj", "qmetro 33 @active 1", varname="ui_qmetro", patching_rect=[30.0, 300.0, 125.0, 22.0], numinlets=2, numoutlets=1, outlettype=["bang"]))
+    boxes.append(make_box("obj-qmetro", "newobj", "qmetro 40 @active 1", varname="ui_qmetro", patching_rect=[30.0, 300.0, 125.0, 22.0], numinlets=2, numoutlets=1, outlettype=["bang"]))
     lines.append(make_line("obj-qmetro", 0, "obj-graph", 0))
+
+    # 2B. 2-CLICK NATIVE DROPDOWN OPEN/CLOSE TOGGLE BRIDGE (`hover` + `mousestate` + `key` -> `obj-lom`)
+    boxes.append(make_box("obj-dd-hover", "newobj", "hover", patching_rect=[890.0, 60.0, 52.0, 22.0], numinlets=4, numoutlets=4, outlettype=["", "", "", ""]))
+    boxes.append(make_box("obj-dd-hin", "newobj", "prepend dd_hover_in", patching_rect=[890.0, 90.0, 125.0, 22.0], numinlets=1, numoutlets=1, outlettype=[""]))
+    boxes.append(make_box("obj-dd-hnone", "message", "dd_hover_none", patching_rect=[1020.0, 90.0, 95.0, 22.0], numinlets=2, numoutlets=1, outlettype=[""]))
+    boxes.append(make_box("obj-dd-hleave", "newobj", "prepend dd_hover_leave", patching_rect=[1120.0, 90.0, 140.0, 22.0], numinlets=1, numoutlets=1, outlettype=[""]))
+    lines.append(make_line("obj-dd-hover", 0, "obj-dd-hin", 0))
+    lines.append(make_line("obj-dd-hover", 1, "obj-dd-hnone", 0))
+    lines.append(make_line("obj-dd-hover", 2, "obj-dd-hleave", 0))
+    lines.append(make_line("obj-dd-hin", 0, "obj-lom", 0))
+    lines.append(make_line("obj-dd-hnone", 0, "obj-lom", 0))
+    lines.append(make_line("obj-dd-hleave", 0, "obj-lom", 0))
+
+    boxes.append(make_box("obj-dd-mspoll", "message", "poll", patching_rect=[890.0, 122.0, 34.0, 22.0], numinlets=2, numoutlets=1, outlettype=[""]))
+    boxes.append(make_box("obj-dd-mstate", "newobj", "mousestate", patching_rect=[890.0, 150.0, 75.0, 22.0], numinlets=1, numoutlets=5, outlettype=["int", "int", "int", "int", "int"]))
+    boxes.append(make_box("obj-dd-mchg", "newobj", "change -1", patching_rect=[890.0, 178.0, 65.0, 22.0], numinlets=1, numoutlets=3, outlettype=["", "int", "int"]))
+    boxes.append(make_box("obj-dd-mpack", "newobj", "pack 0 0 0", patching_rect=[890.0, 206.0, 72.0, 22.0], numinlets=3, numoutlets=1, outlettype=[""]))
+    boxes.append(make_box("obj-dd-mprep", "newobj", "prepend dd_mouse", patching_rect=[890.0, 234.0, 115.0, 22.0], numinlets=1, numoutlets=1, outlettype=[""]))
+    lines.append(make_line("obj-defer-init", 0, "obj-dd-mspoll", 0))
+    lines.append(make_line("obj-dd-mspoll", 0, "obj-dd-mstate", 0))
+    lines.append(make_line("obj-dd-mstate", 0, "obj-dd-mchg", 0))
+    lines.append(make_line("obj-dd-mchg", 0, "obj-dd-mpack", 0))
+    lines.append(make_line("obj-dd-mstate", 1, "obj-dd-mpack", 1))
+    lines.append(make_line("obj-dd-mstate", 2, "obj-dd-mpack", 2))
+    lines.append(make_line("obj-dd-mpack", 0, "obj-dd-mprep", 0))
+    lines.append(make_line("obj-dd-mprep", 0, "obj-lom", 0))
+
+    boxes.append(make_box("obj-dd-key", "newobj", "key", patching_rect=[980.0, 150.0, 36.0, 22.0], numinlets=0, numoutlets=4, outlettype=["int", "int", "int", "int"]))
+    boxes.append(make_box("obj-dd-esc", "newobj", "sel 27", patching_rect=[980.0, 178.0, 44.0, 22.0], numinlets=2, numoutlets=2, outlettype=["bang", ""]))
+    boxes.append(make_box("obj-dd-escmsg", "message", "dd_esc", patching_rect=[980.0, 206.0, 50.0, 22.0], numinlets=2, numoutlets=1, outlettype=[""]))
+    lines.append(make_line("obj-dd-key", 0, "obj-dd-esc", 0))
+    lines.append(make_line("obj-dd-esc", 0, "obj-dd-escmsg", 0))
+    lines.append(make_line("obj-dd-escmsg", 0, "obj-lom", 0))
 
     # 3. FAR-LEFT VERTICAL SIDECHAIN SPINE (x = 0..22)
     boxes.append(make_live_text(
@@ -1484,8 +1530,13 @@ def build_device():
         "- Native Ableton Theme & Zombie States: Ice-blue open dropdown highlight (`live_lcd_control_fg`),\n"
         "  unified flat `live_lcd_frame` bezel, zombie `0 dB` curve (`#837a8f`) when all 8 bands are off,\n"
         "  zombie dial arcs when selected band is inactive, and disabled `Gain` dial on Cut/Notch shapes.\n"
-        "- Phase-Immune Stereo 4096-Point FFT RTA: Complex `L + jR` stereo power spectrum (`370` 1px points,\n"
-        "  DC bin `0` sub-bass accuracy, solid `1.0` opacity `#595169`, zero wide-stereo cancellation).\n"
+        "- Phase-Immune Stereo 4096-Point Power FFT RTA: Complex `L + jR` stereo power spectrum (`frame_seq`\n"
+        "  frame-gated 240-segment density-adaptive grid, zero audio-rate `sqrt()`, DC bin `0` sub-bass accuracy,\n"
+        "  solid `1.0` opacity `#595169`, zero wide-stereo cancellation).\n"
+        "- Deterministic 2-Click Dropdown Toggle: Clicking the same closed dropdown box repeatedly cleanly cycles\n"
+        "  `Open -> Closed -> Open -> Closed` across all 8 filter shape menus and 4 sidechain menus.\n"
+        "- Lightweight UI & DSP Caching: Cached EQ composite response curves, cached glyph metrics, drag-gated\n"
+        "  state persistence, and linear threshold-floor gating in `gen~`.\n"
     )
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(f"dEQ_Eight_Alpha_v0.04/{frozen_name}", frozen_bytes)

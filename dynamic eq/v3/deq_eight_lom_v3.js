@@ -69,6 +69,25 @@ var DEFAULT_TYPES = [2, 3, 3, 5, 3, 3, 3, 6];
 var DEFAULT_ACTIVE = [1, 1, 1, 1, 0, 0, 0, 0];
 var bands = [];
 var drag_tick = 0;
+var is_graph_dragging = 0;
+
+// --- 2-Click Native Dropdown Open/Close Toggle Guard (`live.menu` & `umenu`) ---
+var DD_MENU_LIST = [
+    "band_type_menu_0", "band_type_menu_1", "band_type_menu_2", "band_type_menu_3",
+    "band_type_menu_4", "band_type_menu_5", "band_type_menu_6", "band_type_menu_7",
+    "sc1_track_menu", "sc1_chan_menu", "sc2_track_menu", "sc2_chan_menu"
+];
+var DD_MENU_MAP = {};
+for (var dmi = 0; dmi < DD_MENU_LIST.length; dmi++) {
+    DD_MENU_MAP[DD_MENU_LIST[dmi]] = dmi + 1;
+}
+var dd_hover_id = 0;
+var dd_open_id = 0;
+var dd_last_id = 0;
+var dd_last_mx = -99999;
+var dd_last_my = -99999;
+var dd_open_ms = 0;
+var dd_locked = -1;
 
 // Cached dynamic Ableton Live theme colors (initialized to Live 12 Default Dark Theme)
 var LIVE_COLORS = {
@@ -83,10 +102,21 @@ var save_state_task = new Task(function() {
     save_state_now();
 }, this);
 
-function notifydeleted() {
-    if (save_state_task) {
-        save_state_task.cancel();
+var dd_lock_task = new Task(function() {
+    if (dd_open_id > 0) {
+        dd_set_ignoreclick(1);
     }
+}, this);
+
+var dd_unlock_task = new Task(function() {
+    dd_open_id = 0;
+    dd_set_ignoreclick(0);
+}, this);
+
+function notifydeleted() {
+    if (save_state_task) save_state_task.cancel();
+    if (dd_lock_task) dd_lock_task.cancel();
+    if (dd_unlock_task) dd_unlock_task.cancel();
 }
 
 function freebang() {
@@ -148,6 +178,103 @@ function set_named_val(varname, val) {
     if (obj) {
         obj.message("set", val);
     }
+}
+
+// ============================================================================
+// 2-CLICK NATIVE DROPDOWN OPEN/CLOSE TOGGLE GUARD (`live.menu` & `umenu`)
+// ============================================================================
+function dd_set_ignoreclick(flag) {
+    var v = flag ? 1 : 0;
+    if (dd_locked === v) return;
+    dd_locked = v;
+    for (var i = 0; i < DD_MENU_LIST.length; i++) {
+        var m = get_box(DD_MENU_LIST[i]);
+        if (m) {
+            m.message("ignoreclick", v);
+        }
+    }
+}
+
+function dd_notify_selected() {
+    if (dd_open_id > 0) {
+        dd_last_id = 0;
+        dd_lock_task.cancel();
+        dd_unlock_task.schedule(40);
+    }
+}
+
+function dd_hover_in(vname) {
+    dd_hover_id = DD_MENU_MAP[vname] || 0;
+    if (dd_open_id === 0) {
+        dd_last_id = 0;
+    }
+}
+
+function dd_hover_none() {
+    dd_hover_id = 0;
+    if (dd_open_id === 0) {
+        dd_last_id = 0;
+    }
+}
+
+function dd_hover_leave(vname) {
+    var id = DD_MENU_MAP[vname] || 0;
+    if (id > 0 && dd_hover_id === id) {
+        dd_hover_id = 0;
+    }
+    if (dd_open_id === 0) {
+        dd_last_id = 0;
+    }
+}
+
+function dd_mouse(but, mx, my) {
+    var b_down = Math.round(Number(but)) ? 1 : 0;
+    var x = Number(mx) || 0;
+    var y = Number(my) || 0;
+    var now_ms = Date.now ? Date.now() : (new Date()).getTime();
+
+    if (b_down === 1) {
+        if (dd_open_id > 0) {
+            if (Math.abs(x - dd_last_mx) <= 28 && Math.abs(y - dd_last_my) <= 11) {
+                dd_last_mx = x;
+                dd_last_my = y;
+            } else {
+                dd_last_id = 0;
+            }
+            dd_lock_task.cancel();
+            dd_unlock_task.schedule(55);
+        } else {
+            var tid = dd_hover_id;
+            if (tid === 0 && dd_last_id > 0 && Math.abs(x - dd_last_mx) <= 28 && Math.abs(y - dd_last_my) <= 11) {
+                tid = dd_last_id;
+            }
+            if (tid > 0) {
+                dd_open_id = tid;
+                dd_last_id = tid;
+                dd_last_mx = x;
+                dd_last_my = y;
+                dd_open_ms = now_ms;
+                dd_unlock_task.cancel();
+                dd_lock_task.schedule(15);
+            }
+        }
+    } else {
+        if (dd_open_id > 0 && (now_ms - dd_open_ms) > 220) {
+            if (Math.abs(x - dd_last_mx) > 28 || Math.abs(y - dd_last_my) > 11) {
+                dd_last_id = 0;
+            }
+            dd_lock_task.cancel();
+            dd_unlock_task.schedule(55);
+        }
+    }
+}
+
+function dd_esc() {
+    dd_lock_task.cancel();
+    dd_unlock_task.cancel();
+    dd_open_id = 0;
+    dd_last_id = 0;
+    dd_set_ignoreclick(0);
 }
 
 // ============================================================================
@@ -242,9 +369,9 @@ function save_state_now() {
 }
 
 function save_state() {
-    if (!device_ready) return;
+    if (!device_ready || is_graph_dragging) return;
     save_state_pending = 1;
-    save_state_task.schedule(30);
+    save_state_task.schedule(250);
 }
 
 function recall_state() {
@@ -596,10 +723,19 @@ function sync_selected_band_controls() {
     is_syncing_controls = 0;
 }
 
+var THEME_QUERY_TOKENS = [
+    "lcd_bg", "lcd_frame", "display_scale_text", "lcd_control_fg_alt",
+    "lcd_control_fg_zombie", "display_handle_one", "spectrum_default_color",
+    "value_arc", "value_arc_zombie", "control_fg"
+];
+
 function query_theme_colors() {
     var lc = get_box("live_colors_obj");
     if (lc) {
-        lc.message("everything");
+        for (var i = 0; i < THEME_QUERY_TOKENS.length; i++) {
+            lc.message(THEME_QUERY_TOKENS[i]);
+        }
+        outlet(0, "flush_theme_redraw");
     }
 }
 
@@ -693,6 +829,8 @@ function init_device() {
     if (device_ready && save_state_pending) {
         save_state_now();
     }
+    dd_lock_task.cancel();
+    dd_unlock_task.cancel();
     obj_cache = {};
     rect_cache = {};
     last_device_width = -1;
@@ -701,6 +839,12 @@ function init_device() {
     last_dial_zombie = -1;
     last_gain_enabled = -1;
     band_num_dim_cache = [-1, -1, -1, -1, -1, -1, -1, -1];
+    is_graph_dragging = 0;
+    dd_hover_id = 0;
+    dd_open_id = 0;
+    dd_last_id = 0;
+    dd_locked = -1;
+    dd_set_ignoreclick(0);
 
     var st_box = get_box("eq_state");
     if (st_box && st_box.getvalueof) {
@@ -785,6 +929,7 @@ function ui_band_on(idx, v) {
 
 function ui_band_type(idx, v) {
     if (!device_ready || is_syncing_controls) return;
+    dd_notify_selected();
     var b_idx = clamp(idx, 0, NUM_BANDS - 1);
     var new_t = clamp(Math.round(v), 0, 7);
     var changed = (bands[b_idx].type !== new_t);
@@ -986,6 +1131,7 @@ function rt1_cur_chan(v) {
 
 function set_sc1_track(ui_idx) {
     if (!device_ready || is_syncing_controls || is_syncing_routing) return;
+    dd_notify_selected();
     var real_idx = (ui_idx >= 0 && ui_idx < rt1_type_map.length) ? rt1_type_map[ui_idx] : ui_idx;
     outlet(3, "type", real_idx);
     var chosen = (real_idx >= 0 && real_idx < rt1_type_list.length) ? String(rt1_type_list[real_idx]) : "";
@@ -1001,6 +1147,7 @@ function set_sc1_track(ui_idx) {
 
 function set_sc1_chan(ui_idx) {
     if (!device_ready || is_syncing_controls || is_syncing_routing) return;
+    dd_notify_selected();
     var real_idx = (ui_idx >= 0 && ui_idx < rt1_chan_map.length) ? rt1_chan_map[ui_idx] : ui_idx;
     outlet(3, "channel", real_idx);
 }
@@ -1027,6 +1174,7 @@ function rt2_cur_chan(v) {
 
 function set_sc2_track(ui_idx) {
     if (!device_ready || is_syncing_controls || is_syncing_routing) return;
+    dd_notify_selected();
     var real_idx = (ui_idx >= 0 && ui_idx < rt2_type_map.length) ? rt2_type_map[ui_idx] : ui_idx;
     outlet(4, "type", real_idx);
     var chosen = (real_idx >= 0 && real_idx < rt2_type_list.length) ? String(rt2_type_list[real_idx]) : "";
@@ -1042,6 +1190,7 @@ function set_sc2_track(ui_idx) {
 
 function set_sc2_chan(ui_idx) {
     if (!device_ready || is_syncing_controls || is_syncing_routing) return;
+    dd_notify_selected();
     var real_idx = (ui_idx >= 0 && ui_idx < rt2_chan_map.length) ? rt2_chan_map[ui_idx] : ui_idx;
     outlet(4, "channel", real_idx);
 }
@@ -1174,8 +1323,14 @@ function select_band(idx) {
     save_state_now();
 }
 
+function drag_start() {
+    is_graph_dragging = 1;
+    drag_tick = 0;
+}
+
 function band_fg(idx, f, g) {
     if (idx < 0 || idx >= NUM_BANDS) return;
+    is_graph_dragging = 1;
     var b = bands[idx];
     b.freq = clamp(f, 20.0, 20000.0);
     b.gain = clamp(g, -15.0, 15.0);
@@ -1183,7 +1338,7 @@ function band_fg(idx, f, g) {
     outlet(1, p + "freq", b.freq);
     outlet(1, p + "gain", b.gain);
     if (idx === selected_band) {
-        drag_tick = (drag_tick + 1) & 1;
+        drag_tick = (drag_tick + 1) & 3;
         if (drag_tick === 0) {
             is_syncing_controls = 1;
             set_named_val("band_freq", b.freq);
@@ -1191,7 +1346,6 @@ function band_fg(idx, f, g) {
             is_syncing_controls = 0;
         }
     }
-    save_state();
 }
 
 function band_q(idx, q_val) {
@@ -1200,11 +1354,22 @@ function band_q(idx, q_val) {
     b.q = clamp(q_val, 0.1, 18.0);
     outlet(1, "b" + (idx + 1) + "_q", b.q);
     if (idx === selected_band) {
-        is_syncing_controls = 1;
-        set_named_val("band_q", b.q);
-        is_syncing_controls = 0;
+        if (is_graph_dragging) {
+            drag_tick = (drag_tick + 1) & 3;
+            if (drag_tick === 0) {
+                is_syncing_controls = 1;
+                set_named_val("band_q", b.q);
+                is_syncing_controls = 0;
+            }
+        } else {
+            is_syncing_controls = 1;
+            set_named_val("band_q", b.q);
+            is_syncing_controls = 0;
+            save_state();
+        }
+    } else if (!is_graph_dragging) {
+        save_state();
     }
-    save_state();
 }
 
 function band_range(idx, r_val) {
@@ -1218,20 +1383,28 @@ function band_range(idx, r_val) {
     if (b.dyn_on !== prev_dyn) {
         outlet(1, p + "dyn_on", b.dyn_on);
         sync_band_strip_widgets(idx);
+        update_power_gating();
     }
-    update_power_gating();
     if (idx === selected_band) {
-        is_syncing_controls = 1;
-        set_named_val("band_dyndepth", b.range);
-        if (b.dyn_on !== prev_dyn) {
-            set_named_val("band_dyn_on", b.dyn_on);
+        drag_tick = (drag_tick + 1) & 3;
+        if (!is_graph_dragging || drag_tick === 0 || b.dyn_on !== prev_dyn) {
+            is_syncing_controls = 1;
+            set_named_val("band_dyndepth", b.range);
+            if (b.dyn_on !== prev_dyn) {
+                set_named_val("band_dyn_on", b.dyn_on);
+            }
+            is_syncing_controls = 0;
         }
-        is_syncing_controls = 0;
     }
-    save_state();
+    if (!is_graph_dragging) {
+        update_power_gating();
+        save_state();
+    }
 }
 
 function drag_end(idx) {
+    is_graph_dragging = 0;
+    update_power_gating();
     if (idx === selected_band) {
         is_syncing_controls = 1;
         var b = bands[selected_band];

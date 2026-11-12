@@ -104,10 +104,26 @@ for (var s_init = 0; s_init <= NUM_STEPS; s_init++) {
     STEP_TAN_W.push(0.0);
 }
 
-// 1-Pixel High-Resolution 4096-Point Stereo FFT RTA Grid (370 points across 370px = 12 Hz .. 22 kHz)
-// Uses Catmull-Rom cubic interpolation below 1 bin/px (including DC bin 0) and disjoint bin peak above 1 bin/px!
-var NUM_RTA_PTS = 370;
+// Density-Adaptive 4096-Point Stereo Power FFT RTA Grid (240 intervals = 241 points across 12 Hz .. 22 kHz)
+// - 0.00..0.40 (12..242 Hz, smooth 20-bin Catmull-Rom bass curve): 56 steps (~2.6px, <0.04px sub-pixel sagitta)
+// - 0.40..0.89 (242..8550 Hz, harmonic midrange/presence teeth): 160 steps (~1.13px, preserves 1px spikes!)
+// - 0.89..1.00 (8550..22000 Hz, dense multi-bin air slope): 24 steps (~1.7px)
 var RTA_NORM_X = [];
+(function build_adaptive_rta_norms() {
+    var s1 = 56, s2 = 160, s3 = 24;
+    var k;
+    for (k = 0; k < s1; k++) {
+        RTA_NORM_X.push(0.40 * (k / s1));
+    }
+    for (k = 0; k < s2; k++) {
+        RTA_NORM_X.push(0.40 + 0.49 * (k / s2));
+    }
+    for (k = 0; k <= s3; k++) {
+        RTA_NORM_X.push(0.89 + 0.11 * (k / s3));
+    }
+})();
+
+var NUM_RTA_PTS = RTA_NORM_X.length - 1; // 240
 var RTA_FREQS = [];
 var RTA_TILT_DB = [];
 var RTA_IS_CUBIC = [];
@@ -122,13 +138,21 @@ var RTA_W_P2 = [];
 var RTA_FRAC = [];
 var RTA_B_START = [];
 var RTA_B_END = [];
+var rta_raw_db = [];
 var rta_db_smooth = [];
 var rta_y_norm = [];
+var max_cubic_bin = 64;
+var LOW_BIN_MAG = [];
+for (var lb_i = 0; lb_i < 128; lb_i++) {
+    LOW_BIN_MAG.push(0.0);
+}
+var last_rta_seq = -1;
+var rta_at_floor = true;
+var last_drag_ms = 0;
 
 for (var ri = 0; ri <= NUM_RTA_PTS; ri++) {
-    var rn = ri / NUM_RTA_PTS;
+    var rn = RTA_NORM_X[ri];
     var rf = MIN_FREQ * Math.pow(MAX_FREQ / MIN_FREQ, rn);
-    RTA_NORM_X.push(rn);
     RTA_FREQS.push(rf);
     RTA_TILT_DB.push(3.5 * (Math.log(rf / 250.0) / Math.LN10));
     RTA_IS_CUBIC.push(0);
@@ -143,6 +167,7 @@ for (var ri = 0; ri <= NUM_RTA_PTS; ri++) {
     RTA_FRAC.push(0.0);
     RTA_B_START.push(0);
     RTA_B_END.push(0);
+    rta_raw_db.push(-90.0);
     rta_db_smooth.push(-90.0);
     rta_y_norm.push(1.0);
 }
@@ -155,6 +180,7 @@ function rebuild_freq_tables() {
     }
 
     var bin_scale = FFT_SIZE / SAMPLE_RATE;
+    var max_cb = 4;
     for (var i = 0; i <= NUM_RTA_PTS; i++) {
         var f0 = RTA_FREQS[i];
         var f1 = (i < NUM_RTA_PTS) ? RTA_FREQS[i + 1] : MAX_FREQ;
@@ -162,6 +188,8 @@ function rebuild_freq_tables() {
         var k1_f = f1 * bin_scale;
         if (k1_f - k0_f < 1.0) {
             var idx0 = clamp(Math.floor(k0_f), 0, 2046);
+            var idx_p2 = idx0 + 2 <= 2047 ? idx0 + 2 : 2047;
+            if (idx_p2 > max_cb) max_cb = idx_p2;
             var t = clamp(k0_f - idx0, 0.0, 1.0);
             var t2 = t * t;
             var t3 = t2 * t;
@@ -169,7 +197,7 @@ function rebuild_freq_tables() {
             RTA_IDX0[i] = idx0;
             RTA_IDX_M1[i] = idx0 > 0 ? idx0 - 1 : 0;
             RTA_IDX_P1[i] = idx0 + 1;
-            RTA_IDX_P2[i] = idx0 + 2 <= 2047 ? idx0 + 2 : 2047;
+            RTA_IDX_P2[i] = idx_p2;
             RTA_W_M1[i] = -0.5 * t + t2 - 0.5 * t3;
             RTA_W_0[i]  = 1.0 - 2.5 * t2 + 1.5 * t3;
             RTA_W_P1[i] = 0.5 * t + 2.0 * t2 - 1.5 * t3;
@@ -193,6 +221,10 @@ function rebuild_freq_tables() {
             RTA_B_START[i] = b_start;
             RTA_B_END[i] = b_end;
         }
+    }
+    max_cubic_bin = max_cb;
+    while (LOW_BIN_MAG.length <= max_cubic_bin) {
+        LOW_BIN_MAG.push(0.0);
     }
 }
 
@@ -252,50 +284,90 @@ function update_cached_coords(w, gh) {
     }
 }
 
-// --- Sample 2048 stereo power FFT bins (`0..2047`) onto our 1px 370-point log grid ---
+// --- Sample 2048 stereo power FFT bins (`0..2047`) gated by `frame_seq` at index `2048` ---
 var LOG10_20 = 20.0 / Math.LN10;
+var LOG10_10 = 10.0 / Math.LN10;
 
 function update_rta_from_buffer() {
     if (!rta_on || !rta_buf) return false;
-    var bins = rta_buf.peek(1, 0, 2048);
-    if (!bins || bins.length < 2048) return false;
 
-    var any_change = false;
-    for (var i = 0; i <= NUM_RTA_PTS; i++) {
-        var mag = 0.0;
-        if (RTA_IS_CUBIC[i]) {
-            var m_curr = bins[RTA_IDX0[i]];
-            var m_next = bins[RTA_IDX_P1[i]];
-            mag = RTA_W_M1[i] * bins[RTA_IDX_M1[i]]
-                + RTA_W_0[i]  * m_curr
-                + RTA_W_P1[i] * m_next
-                + RTA_W_P2[i] * bins[RTA_IDX_P2[i]];
-            if (mag < 0.0) {
-                var frac = RTA_FRAC[i];
-                mag = (1.0 - frac) * m_curr + frac * m_next;
+    // O(1) check: only copy & log-transform 2048 FFT bins when `obj-rta-gen` commits a new 4096-sample frame (~11.7 Hz)!
+    var seq_peek = rta_buf.peek(1, 2048, 1);
+    var cur_seq = (typeof seq_peek === "number") ? seq_peek : ((seq_peek && seq_peek.length > 0) ? seq_peek[0] : -1);
+
+    if (cur_seq !== last_rta_seq) {
+        last_rta_seq = cur_seq;
+        var bins = rta_buf.peek(1, 0, 2048);
+        if (bins && bins.length >= 2048) {
+            for (var lb = 0; lb <= max_cubic_bin; lb++) {
+                var pv = bins[lb];
+                LOW_BIN_MAG[lb] = (pv > 0.0) ? Math.sqrt(pv) : 0.0;
             }
-        } else {
-            var b_start = RTA_B_START[i];
-            var b_end = RTA_B_END[i];
-            for (var b = b_start; b <= b_end; b++) {
-                var bv = bins[b];
-                if (bv > mag) mag = bv;
+            var has_signal = false;
+            for (var j = 0; j <= NUM_RTA_PTS; j++) {
+                var r_db = -90.0;
+                if (RTA_IS_CUBIC[j]) {
+                    var m_curr = LOW_BIN_MAG[RTA_IDX0[j]];
+                    var m_next = LOW_BIN_MAG[RTA_IDX_P1[j]];
+                    var mag = RTA_W_M1[j] * LOW_BIN_MAG[RTA_IDX_M1[j]]
+                            + RTA_W_0[j]  * m_curr
+                            + RTA_W_P1[j] * m_next
+                            + RTA_W_P2[j] * LOW_BIN_MAG[RTA_IDX_P2[j]];
+                    if (mag < 0.0) {
+                        var frac = RTA_FRAC[j];
+                        mag = (1.0 - frac) * m_curr + frac * m_next;
+                    }
+                    if (mag > 1e-6) {
+                        r_db = LOG10_20 * Math.log(mag) + RTA_TILT_DB[j];
+                    }
+                } else {
+                    var b_start = RTA_B_START[j];
+                    var b_end = RTA_B_END[j];
+                    var max_pwr = 0.0;
+                    for (var b = b_start; b <= b_end; b++) {
+                        var bv = bins[b];
+                        if (bv > max_pwr) max_pwr = bv;
+                    }
+                    if (max_pwr > 1e-12) {
+                        r_db = LOG10_10 * Math.log(max_pwr) + RTA_TILT_DB[j];
+                    }
+                }
+                if (r_db < -90.0) r_db = -90.0;
+                else if (r_db > -89.9) has_signal = true;
+                rta_raw_db[j] = r_db;
+            }
+            if (has_signal) {
+                rta_at_floor = false;
             }
         }
+    }
 
-        var raw_db = (mag > 1e-6) ? (LOG10_20 * Math.log(mag) + RTA_TILT_DB[i]) : -90.0;
+    if (rta_at_floor) {
+        return false;
+    }
+
+    var any_change = false;
+    var all_floor = true;
+    for (var i = 0; i <= NUM_RTA_PTS; i++) {
+        var raw_db = rta_raw_db[i];
         var prev_db = rta_db_smooth[i];
         var next_db = (raw_db > prev_db)
-            ? (0.18 * prev_db + 0.82 * raw_db)
-            : (0.82 * prev_db + 0.18 * raw_db);
-        if (next_db < -90.0) next_db = -90.0;
-
+            ? (0.13 * prev_db + 0.87 * raw_db)
+            : (0.785 * prev_db + 0.215 * raw_db);
+        if (next_db <= -89.85) {
+            next_db = -90.0;
+        } else {
+            all_floor = false;
+        }
         if (Math.abs(next_db - prev_db) > 0.12) {
             any_change = true;
         }
         rta_db_smooth[i] = next_db;
         var norm_amp = clamp((next_db + 75.2) / 66.0, 0.0, 1.0);
         rta_y_norm[i] = 1.0 - norm_amp;
+    }
+    if (all_floor) {
+        rta_at_floor = true;
     }
     return any_change;
 }
@@ -424,10 +496,128 @@ function eval_svf_db(c, tan_w) {
     return LOG10_SCALE * Math.log(mag_sq);
 }
 
+// --- Cached Composite EQ Curve & Band Numeral Glyph Extents (Zero redundant math/FreeType calls on RTA ticks!) ---
+var curve_dirty = true;
+var cached_any_band_active = true;
+var cached_any_dyn_range = false;
+var cached_n_live = 0;
+var COMP_LIVE_NORM = [];
+var COMP_TARG_NORM = [];
+var DYN_BAND_HAS_SHADE = [false, false, false, false, false, false, false, false];
+var DYN_STAT_NORM = [];
+var DYN_TARG_NORM = [];
+
+for (var ci_init = 0; ci_init <= NUM_STEPS; ci_init++) {
+    COMP_LIVE_NORM.push(0.5);
+    COMP_TARG_NORM.push(0.5);
+}
+for (var db_b = 0; db_b < NUM_BANDS; db_b++) {
+    var st_arr = [];
+    var tg_arr = [];
+    for (var ci_b = 0; ci_b <= NUM_STEPS; ci_b++) {
+        st_arr.push(0.5);
+        tg_arr.push(0.5);
+    }
+    DYN_STAT_NORM.push(st_arr);
+    DYN_TARG_NORM.push(tg_arr);
+}
+
+var BAND_LABELS = ["1", "2", "3", "4", "5", "6", "7", "8"];
+var BAND_LABEL_HALF_W = [2.6, 2.6, 2.6, 2.6, 2.6, 2.6, 2.6, 2.6];
+var digit_metrics_ready = false;
+
+function db_to_norm_y(db) {
+    var cl = clamp(db, MIN_DB, MAX_DB);
+    return 1.0 - (cl - MIN_DB) / (MAX_DB - MIN_DB);
+}
+
+function update_curve_cache() {
+    if (!curve_dirty) return;
+    curve_dirty = false;
+
+    var n_live = 0;
+    var n_targ = 0;
+    var any_dyn_range = false;
+    var any_band_active = false;
+
+    for (var bi = 0; bi < NUM_BANDS; bi++) {
+        var bd = bands[bi];
+        var c_live = LIVE_COEFFS[bi];
+        var c_targ = TARG_COEFFS[bi];
+        DYN_BAND_HAS_SHADE[bi] = false;
+        if (!bd.active) {
+            c_live.bypass = true;
+            c_targ.bypass = true;
+            continue;
+        }
+        any_band_active = true;
+        var has_dyn = (bd.dyn_on && uses_gain(bd.type) && Math.abs(bd.range) > 0.1);
+        var act_g = (bd.dyn_on && uses_gain(bd.type)) ? bd.gr_db : 0.0;
+        var dyn_g = has_dyn ? bd.range : 0.0;
+
+        write_svf_coeffs(c_live, bd.type, bd.freq, bd.q, (bd.gain + act_g) * global_scale);
+        if (has_dyn || Math.abs(act_g) > 0.05) {
+            write_svf_coeffs(c_targ, bd.type, bd.freq, bd.q, (bd.gain + dyn_g) * global_scale);
+        } else {
+            copy_coeff_slot(c_targ, c_live);
+        }
+
+        if (has_dyn) {
+            any_dyn_range = true;
+            DYN_BAND_HAS_SHADE[bi] = true;
+            var db_static_c = STAT_COEFFS[bi];
+            write_svf_coeffs(db_static_c, bd.type, bd.freq, bd.q, bd.gain * global_scale);
+            var st_out = DYN_STAT_NORM[bi];
+            var tg_out = DYN_TARG_NORM[bi];
+            for (var sd = 0; sd <= NUM_STEPS; sd++) {
+                var tw_s = STEP_TAN_W[sd];
+                st_out[sd] = db_to_norm_y(eval_svf_db(db_static_c, tw_s));
+                tg_out[sd] = db_to_norm_y(eval_svf_db(c_targ, tw_s));
+            }
+        }
+
+        if (!c_live.bypass) {
+            ACTIVE_LIVE_LIST[n_live++] = c_live;
+        }
+        if (!c_targ.bypass) {
+            ACTIVE_TARG_LIST[n_targ++] = c_targ;
+        }
+    }
+
+    cached_any_band_active = any_band_active;
+    cached_any_dyn_range = any_dyn_range;
+    cached_n_live = n_live;
+
+    if (any_dyn_range) {
+        for (var st_t = 0; st_t <= NUM_STEPS; st_t++) {
+            var tw_t = STEP_TAN_W[st_t];
+            var prod_t = 1.0;
+            for (var bt = 0; bt < n_targ; bt++) {
+                prod_t *= eval_svf_mag_sq(ACTIVE_TARG_LIST[bt], tw_t);
+            }
+            var db_t = (prod_t <= 1e-12) ? -120.0 : (LOG10_SCALE * Math.log(prod_t));
+            COMP_TARG_NORM[st_t] = db_to_norm_y(db_t);
+        }
+    }
+
+    if (n_live > 0) {
+        for (var step = 0; step <= NUM_STEPS; step++) {
+            var tw = STEP_TAN_W[step];
+            var prod_l = 1.0;
+            for (var bl = 0; bl < n_live; bl++) {
+                prod_l *= eval_svf_mag_sq(ACTIVE_LIVE_LIST[bl], tw);
+            }
+            var db_l = (prod_l <= 1e-12) ? -120.0 : (LOG10_SCALE * Math.log(prod_l));
+            COMP_LIVE_NORM[step] = db_to_norm_y(db_l);
+        }
+    }
+}
+
 function paint() {
     var w = box.rect[2] - box.rect[0];
     var gh = box.rect[3] - box.rect[1]; // Full 132px height is the graph
     update_cached_coords(w, gh);
+    update_curve_cache();
 
     var fg = THEME.control_fg;
     var pk = THEME.handle_one;
@@ -439,9 +629,9 @@ function paint() {
     mgraphics.rectangle(0, 0, w, gh);
     mgraphics.fill();
 
-    // 2. High-Resolution 4096-Point Stereo FFT Spectrum Analyzer
-    //    Solid 1.0-alpha fill (`live_spectrum_default_color` #595169) with 1px horizontal detail, matching Stock EQ Eight!
-    if (rta_on) {
+    // 2. High-Resolution 4096-Point Stereo Power FFT Spectrum Analyzer
+    //    Solid 1.0-alpha fill (`live_spectrum_default_color` #595169) matching Stock EQ Eight!
+    if (rta_on && !rta_at_floor) {
         var sp_col = THEME.spectrum_fill;
         mgraphics.set_source_rgba(sp_col[0], sp_col[1], sp_col[2], 1.0);
         mgraphics.move_to(0, gh);
@@ -486,62 +676,20 @@ function paint() {
     mgraphics.line_to(w, DB_Y_PX[2]);
     mgraphics.stroke();
 
-    // 5. Compute filter coefficients in-place (zero object/array allocations per frame!)
-    var n_live = 0;
-    var n_targ = 0;
-    var any_dyn_range = false;
-    var any_band_active = false;
-
-    for (var bi = 0; bi < NUM_BANDS; bi++) {
-        var bd = bands[bi];
-        var c_live = LIVE_COEFFS[bi];
-        var c_targ = TARG_COEFFS[bi];
-        if (!bd.active) {
-            c_live.bypass = true;
-            c_targ.bypass = true;
-            continue;
-        }
-        any_band_active = true;
-        var has_dyn = (bd.dyn_on && uses_gain(bd.type) && Math.abs(bd.range) > 0.1);
-        var act_g = (bd.dyn_on && uses_gain(bd.type)) ? bd.gr_db : 0.0;
-        var dyn_g = has_dyn ? bd.range : 0.0;
-        if (has_dyn) any_dyn_range = true;
-
-        write_svf_coeffs(c_live, bd.type, bd.freq, bd.q, (bd.gain + act_g) * global_scale);
-        if (has_dyn || Math.abs(act_g) > 0.05) {
-            write_svf_coeffs(c_targ, bd.type, bd.freq, bd.q, (bd.gain + dyn_g) * global_scale);
-        } else {
-            copy_coeff_slot(c_targ, c_live);
-        }
-
-        if (!c_live.bypass) {
-            ACTIVE_LIVE_LIST[n_live++] = c_live;
-        }
-        if (!c_targ.bypass) {
-            ACTIVE_TARG_LIST[n_targ++] = c_targ;
-        }
-    }
-
-    // 6. Shaded Range Indicator ONLY for Dynamic Ranges
-    if (any_dyn_range) {
+    // 5. Shaded Range Indicator ONLY for Dynamic Ranges (using pre-evaluated norm caches)
+    if (cached_any_dyn_range) {
         for (var dbi = 0; dbi < NUM_BANDS; dbi++) {
-            var dbd = bands[dbi];
-            if (dbd.active && dbd.dyn_on && Math.abs(dbd.range) > 0.1 && uses_gain(dbd.type)) {
-                var db_static_c = STAT_COEFFS[dbi];
-                write_svf_coeffs(db_static_c, dbd.type, dbd.freq, dbd.q, dbd.gain * global_scale);
-                var db_targ_c = TARG_COEFFS[dbi];
+            if (DYN_BAND_HAS_SHADE[dbi]) {
+                var st_n = DYN_STAT_NORM[dbi];
+                var tg_n = DYN_TARG_NORM[dbi];
                 var fill_alpha = (dbi === selected_band) ? 0.24 : 0.15;
                 mgraphics.set_source_rgba(fg[0], fg[1], fg[2], fill_alpha);
-                for (var sd = 0; sd <= NUM_STEPS; sd++) {
-                    var xd = STEP_X_PX[sd];
-                    var yd = clamp(db_to_y(eval_svf_db(db_static_c, STEP_TAN_W[sd]), gh), 0.0, gh);
-                    if (sd === 0) mgraphics.move_to(xd, yd);
-                    else mgraphics.line_to(xd, yd);
+                mgraphics.move_to(0, st_n[0] * gh);
+                for (var sd1 = 1; sd1 <= NUM_STEPS; sd1++) {
+                    mgraphics.line_to(STEP_X_PX[sd1], st_n[sd1] * gh);
                 }
                 for (var sd2 = NUM_STEPS; sd2 >= 0; sd2--) {
-                    var xd2 = STEP_X_PX[sd2];
-                    var yd2 = clamp(db_to_y(eval_svf_db(db_targ_c, STEP_TAN_W[sd2]), gh), 0.0, gh);
-                    mgraphics.line_to(xd2, yd2);
+                    mgraphics.line_to(STEP_X_PX[sd2], tg_n[sd2] * gh);
                 }
                 mgraphics.close_path();
                 mgraphics.fill();
@@ -549,126 +697,118 @@ function paint() {
         }
     }
 
-    // 7. Composite Dynamic Target Range Envelope Curve + Active/Zombie Composite EQ Curve
+    // 6. Composite Dynamic Target Range Envelope Curve + Active/Zombie Composite EQ Curve
     var mid_y = DB_Y_PX[2];
 
-    if (any_dyn_range) {
+    if (cached_any_dyn_range) {
         mgraphics.set_line_width(1.1);
         mgraphics.set_source_rgba(fg[0], fg[1], fg[2], 0.50);
-        for (var st_t = 0; st_t <= NUM_STEPS; st_t++) {
-            var tw_t = STEP_TAN_W[st_t];
-            var prod_t = 1.0;
-            for (var bt = 0; bt < n_targ; bt++) {
-                prod_t *= eval_svf_mag_sq(ACTIVE_TARG_LIST[bt], tw_t);
-            }
-            var db_t = (prod_t <= 1e-12) ? -120.0 : (LOG10_SCALE * Math.log(prod_t));
-            var yt = clamp(db_to_y(db_t, gh), 0.0, gh);
-            if (st_t === 0) mgraphics.move_to(0, yt);
-            else mgraphics.line_to(STEP_X_PX[st_t], yt);
+        mgraphics.move_to(0, COMP_TARG_NORM[0] * gh);
+        for (var st_tc = 1; st_tc <= NUM_STEPS; st_tc++) {
+            mgraphics.line_to(STEP_X_PX[st_tc], COMP_TARG_NORM[st_tc] * gh);
         }
         mgraphics.stroke();
     }
 
     // Main Composite Response Curve: Cyan when >= 1 band is ON, Zombie Grey (#837a8f) when all 8 bands are OFF!
-    var curve_col = any_band_active ? fg : THEME.control_fg_zombie;
+    var curve_col = cached_any_band_active ? fg : THEME.control_fg_zombie;
     mgraphics.set_source_rgba(curve_col[0], curve_col[1], curve_col[2], 1.0);
     mgraphics.set_line_width(1.35);
-    if (n_live === 0) {
+    if (cached_n_live === 0) {
         mgraphics.move_to(0, mid_y);
         mgraphics.line_to(w, mid_y);
     } else {
-        for (var step = 0; step <= NUM_STEPS; step++) {
-            var tw = STEP_TAN_W[step];
-            var prod_l = 1.0;
-            for (var bl = 0; bl < n_live; bl++) {
-                prod_l *= eval_svf_mag_sq(ACTIVE_LIVE_LIST[bl], tw);
-            }
-            var db_l = (prod_l <= 1e-12) ? -120.0 : (LOG10_SCALE * Math.log(prod_l));
-            var yl = clamp(db_to_y(db_l, gh), 0.0, gh);
-            if (step === 0) mgraphics.move_to(0, yl);
-            else mgraphics.line_to(STEP_X_PX[step], yl);
+        mgraphics.move_to(0, COMP_LIVE_NORM[0] * gh);
+        for (var step_c = 1; step_c <= NUM_STEPS; step_c++) {
+            mgraphics.line_to(STEP_X_PX[step_c], COMP_LIVE_NORM[step_c] * gh);
         }
     }
     mgraphics.stroke();
 
-    // 8. Dynamic Theme Band Dots (`live_display_handle_one`, r=6.2) + Offset-Right Dynamic Range Handle
-    mgraphics.select_font_face("Ableton Sans Small Bold", "normal", "bold");
-    mgraphics.set_font_size(9.0);
-
-    for (var idx = 0; idx < NUM_BANDS; idx++) {
-        var b = bands[idx];
-        if (!b.active) continue;
-
-        var bx = freq_to_x(b.freq, w);
-        var has_g = uses_gain(b.type);
-        var y_main = clamp(db_to_y(has_g ? b.gain : 0.0, gh), 6.5, gh - 6.5);
-        var is_sel = (idx === selected_band);
-        var nr = 6.2;
-
-        // --- Dynamic Range Stem & Draggable Ring Handle (Offset to the right of the band dot) ---
-        if (has_g) {
-            var dx_off = (bx > w - 16.0) ? -11.5 : 11.5;
-            var dx = bx + dx_off;
-            var edge_x = bx + (dx_off > 0 ? nr : -nr);
-
-            if (b.dyn_on && Math.abs(b.range) > 0.1) {
-                var y_dyn = clamp(db_to_y(b.gain + b.range, gh), 5.0, gh - 5.0);
-
-                mgraphics.set_line_width(1.25);
-                mgraphics.set_source_rgba(fg[0], fg[1], fg[2], 0.85);
-                mgraphics.move_to(edge_x, y_main);
-                mgraphics.line_to(dx, y_main);
-                mgraphics.line_to(dx, y_dyn);
-                mgraphics.stroke();
-
-                mgraphics.set_source_rgba(fg[0], fg[1], fg[2], 1.0);
-                mgraphics.arc(dx, y_dyn, 3.3, 0, Math.PI * 2);
-                mgraphics.stroke();
-
-                if (Math.abs(b.gr_db) > 0.08) {
-                    var y_act = clamp(db_to_y(b.gain + b.gr_db, gh), 5.0, gh - 5.0);
-                    mgraphics.set_source_rgba(1.0, 1.0, 1.0, 0.95);
-                    mgraphics.arc(dx, y_act, 2.5, 0, Math.PI * 2);
-                    mgraphics.fill();
+    // 7. Dynamic Theme Band Dots (`live_display_handle_one`, r=6.2) + Offset-Right Dynamic Range Handle
+    if (cached_any_band_active) {
+        mgraphics.select_font_face("Ableton Sans Small Bold", "normal", "bold");
+        mgraphics.set_font_size(9.0);
+        if (!digit_metrics_ready) {
+            for (var mi = 0; mi < NUM_BANDS; mi++) {
+                var tm_init = mgraphics.text_measure(BAND_LABELS[mi]);
+                if (tm_init && tm_init.length > 0 && tm_init[0] > 0) {
+                    BAND_LABEL_HALF_W[mi] = tm_init[0] * 0.5;
                 }
-            } else if (is_sel) {
-                var ring_edge = dx - (dx_off > 0 ? 3.0 : -3.0);
-                mgraphics.set_line_width(1.1);
-                mgraphics.set_source_rgba(fg[0], fg[1], fg[2], 0.65);
-                mgraphics.move_to(edge_x, y_main);
-                mgraphics.line_to(ring_edge, y_main);
-                mgraphics.stroke();
-
-                mgraphics.set_line_width(1.2);
-                mgraphics.set_source_rgba(fg[0], fg[1], fg[2], 0.90);
-                mgraphics.arc(dx, y_main, 3.0, 0, Math.PI * 2);
-                mgraphics.stroke();
             }
+            digit_metrics_ready = true;
         }
 
-        // --- Theme-Cohesive EQ Eight Band Dot (`live_display_handle_one`) ---
-        // Selected dot: solid pink circle + dark text.
-        // Unselected dot: transparent interior (composite curve remains visible behind!) + 1.35pt pink ring + pink text.
-        if (is_sel) {
-            mgraphics.set_source_rgba(pk[0], pk[1], pk[2], 1.0);
-            mgraphics.arc(bx, y_main, nr, 0, Math.PI * 2);
-            mgraphics.fill();
+        for (var idx = 0; idx < NUM_BANDS; idx++) {
+            var b = bands[idx];
+            if (!b.active) continue;
 
-            mgraphics.set_source_rgba(bg_col[0], bg_col[1], bg_col[2], 1.0);
-        } else {
-            mgraphics.set_line_width(1.35);
-            mgraphics.set_source_rgba(pk[0], pk[1], pk[2], 1.0);
-            mgraphics.arc(bx, y_main, nr, 0, Math.PI * 2);
-            mgraphics.stroke();
+            var bx = freq_to_x(b.freq, w);
+            var has_g = uses_gain(b.type);
+            var y_main = clamp(db_to_y(has_g ? b.gain : 0.0, gh), 6.5, gh - 6.5);
+            var is_sel = (idx === selected_band);
+            var nr = 6.2;
 
-            mgraphics.set_source_rgba(pk[0], pk[1], pk[2], 1.0);
+            // --- Dynamic Range Stem & Draggable Ring Handle (Offset to the right of the band dot) ---
+            if (has_g) {
+                var dx_off = (bx > w - 16.0) ? -11.5 : 11.5;
+                var dx = bx + dx_off;
+                var edge_x = bx + (dx_off > 0 ? nr : -nr);
+
+                if (b.dyn_on && Math.abs(b.range) > 0.1) {
+                    var y_dyn = clamp(db_to_y(b.gain + b.range, gh), 5.0, gh - 5.0);
+
+                    mgraphics.set_line_width(1.25);
+                    mgraphics.set_source_rgba(fg[0], fg[1], fg[2], 0.85);
+                    mgraphics.move_to(edge_x, y_main);
+                    mgraphics.line_to(dx, y_main);
+                    mgraphics.line_to(dx, y_dyn);
+                    mgraphics.stroke();
+
+                    mgraphics.set_source_rgba(fg[0], fg[1], fg[2], 1.0);
+                    mgraphics.arc(dx, y_dyn, 3.3, 0, Math.PI * 2);
+                    mgraphics.stroke();
+
+                    if (Math.abs(b.gr_db) > 0.08) {
+                        var y_act = clamp(db_to_y(b.gain + b.gr_db, gh), 5.0, gh - 5.0);
+                        mgraphics.set_source_rgba(1.0, 1.0, 1.0, 0.95);
+                        mgraphics.arc(dx, y_act, 2.5, 0, Math.PI * 2);
+                        mgraphics.fill();
+                    }
+                } else if (is_sel) {
+                    var ring_edge = dx - (dx_off > 0 ? 3.0 : -3.0);
+                    mgraphics.set_line_width(1.1);
+                    mgraphics.set_source_rgba(fg[0], fg[1], fg[2], 0.65);
+                    mgraphics.move_to(edge_x, y_main);
+                    mgraphics.line_to(ring_edge, y_main);
+                    mgraphics.stroke();
+
+                    mgraphics.set_line_width(1.2);
+                    mgraphics.set_source_rgba(fg[0], fg[1], fg[2], 0.90);
+                    mgraphics.arc(dx, y_main, 3.0, 0, Math.PI * 2);
+                    mgraphics.stroke();
+                }
+            }
+
+            // --- Theme-Cohesive EQ Eight Band Dot (`live_display_handle_one`) ---
+            if (is_sel) {
+                mgraphics.set_source_rgba(pk[0], pk[1], pk[2], 1.0);
+                mgraphics.arc(bx, y_main, nr, 0, Math.PI * 2);
+                mgraphics.fill();
+
+                mgraphics.set_source_rgba(bg_col[0], bg_col[1], bg_col[2], 1.0);
+            } else {
+                mgraphics.set_line_width(1.35);
+                mgraphics.set_source_rgba(pk[0], pk[1], pk[2], 1.0);
+                mgraphics.arc(bx, y_main, nr, 0, Math.PI * 2);
+                mgraphics.stroke();
+
+                mgraphics.set_source_rgba(pk[0], pk[1], pk[2], 1.0);
+            }
+
+            mgraphics.move_to(bx - BAND_LABEL_HALF_W[idx], y_main + 3.1);
+            mgraphics.show_text(BAND_LABELS[idx]);
         }
-
-        var label = (idx + 1).toString();
-        var tm = mgraphics.text_measure(label);
-        var tx = bx - ((tm && tm.length > 0 && tm[0] > 0) ? (tm[0] * 0.5) : 2.6);
-        mgraphics.move_to(tx, y_main + 3.1);
-        mgraphics.show_text(label);
     }
 }
 
@@ -729,12 +869,14 @@ function onclick(x, y, but, cmd, shift, capslock, option, ctrl) {
         if (selected_band !== prev_sel) {
             outlet(0, "select_band", selected_band);
         }
+        outlet(0, "drag_start");
 
         if (option) {
             drag_mode = "q";
         } else if (hit.mode === "range" || shift) {
             if (!bands[hit.idx].dyn_on) {
                 bands[hit.idx].dyn_on = 1;
+                curve_dirty = true;
                 outlet(0, "band_dyn_on", hit.idx, 1);
             }
             drag_mode = "range";
@@ -769,15 +911,18 @@ function ondrag(x, y, but, cmd, shift, capslock, option, ctrl) {
 
     last_mx = x;
     last_my = y;
+    last_drag_ms = Date.now ? Date.now() : (new Date()).getTime();
 
     if (drag_mode === "q" || option) {
         b.q = clamp(b.q * Math.pow(1.025, dy_move), 0.1, 18.0);
+        curve_dirty = true;
         mgraphics.redraw();
         outlet(0, "band_q", drag_band, b.q);
     } else if (drag_mode === "range" || shift) {
         var target_db = y_to_db(y, gh);
         b.range = clamp(target_db - b.gain, -15.0, 15.0);
         b.dyn_on = (Math.abs(b.range) > 0.05) ? 1 : b.dyn_on;
+        curve_dirty = true;
         mgraphics.redraw();
         outlet(0, "band_range", drag_band, b.range);
     } else {
@@ -785,6 +930,7 @@ function ondrag(x, y, but, cmd, shift, capslock, option, ctrl) {
         if (uses_gain(b.type)) {
             b.gain = clamp(y_to_db(y, gh), -15.0, 15.0);
         }
+        curve_dirty = true;
         mgraphics.redraw();
         outlet(0, "band_fg", drag_band, b.freq, b.gain);
     }
@@ -820,6 +966,7 @@ function onwheel(x, y, amt1, amt2, cmd, shift, capslock, option, ctrl) {
     var dir = delta > 0 ? 1.0 : -1.0;
     var mag = clamp(Math.abs(delta), 0.25, 3.0);
     bands[target_idx].q = clamp(bands[target_idx].q * Math.pow(1.10, dir * mag), 0.1, 18.0);
+    curve_dirty = true;
     mgraphics.redraw();
     outlet(0, "band_q", target_idx, bands[target_idx].q);
 }
@@ -827,17 +974,24 @@ function onwheel(x, y, amt1, amt2, cmd, shift, capslock, option, ctrl) {
 function ondblclick(x, y) {
     var w = box.rect[2] - box.rect[0];
     var gh = box.rect[3] - box.rect[1];
+    if (drag_band >= 0) {
+        outlet(0, "drag_end", drag_band);
+        drag_band = -1;
+        drag_mode = "none";
+    }
 
     var hit = find_hit(x, y, w, gh);
     if (hit.idx >= 0) {
         if (hit.mode === "range") {
             bands[hit.idx].range = 0.0;
             bands[hit.idx].dyn_on = 0;
+            curve_dirty = true;
             mgraphics.redraw();
             outlet(0, "band_range", hit.idx, 0.0);
             outlet(0, "band_dyn_on", hit.idx, 0);
         } else {
             bands[hit.idx].active = 0;
+            curve_dirty = true;
             mgraphics.redraw();
             outlet(0, "band_active", hit.idx, 0);
         }
@@ -848,10 +1002,12 @@ function ondblclick(x, y) {
                 bands[i].freq = x_to_freq(x, w);
                 bands[i].gain = clamp(y_to_db(y, gh), -15.0, 15.0);
                 selected_band = i;
+                curve_dirty = true;
                 mgraphics.redraw();
                 outlet(0, "select_band", i);
                 outlet(0, "band_active", i, 1);
                 outlet(0, "band_fg", i, bands[i].freq, bands[i].gain);
+                outlet(0, "drag_end", i);
                 return;
             }
         }
@@ -859,9 +1015,22 @@ function ondblclick(x, y) {
 }
 
 // --- Dynamic Theme Color Receiver (from `live.colors` in patcher) ---
+var theme_dirty = false;
+
 function set_theme_color(token, r, g, b, a) {
     if (THEME[token] !== undefined) {
-        THEME[token] = [r, g, b, (a !== undefined) ? a : 1.0];
+        var cur = THEME[token];
+        var alpha = (a !== undefined) ? a : 1.0;
+        if (Math.abs(cur[0] - r) > 0.001 || Math.abs(cur[1] - g) > 0.001 || Math.abs(cur[2] - b) > 0.001 || Math.abs(cur[3] - alpha) > 0.001) {
+            THEME[token] = [r, g, b, alpha];
+            theme_dirty = true;
+        }
+    }
+}
+
+function flush_theme_redraw() {
+    if (theme_dirty) {
+        theme_dirty = false;
         mgraphics.redraw();
     }
 }
@@ -870,6 +1039,7 @@ function set_theme_color(token, r, g, b, a) {
 function set_rta_buf(buf_name) {
     if (typeof Buffer !== "undefined") {
         rta_buf = new Buffer(buf_name);
+        last_rta_seq = -1;
     }
 }
 
@@ -884,11 +1054,15 @@ function set_srate(sr) {
     if (Math.abs(next_sr - SAMPLE_RATE) < 1.0) return;
     SAMPLE_RATE = next_sr;
     rebuild_freq_tables();
+    curve_dirty = true;
     mgraphics.redraw();
 }
 
 function set_rta_on(v) {
     rta_on = v ? 1 : 0;
+    if (rta_on) {
+        last_rta_seq = -1;
+    }
     mgraphics.redraw();
 }
 
@@ -907,19 +1081,30 @@ function set_band(idx, active, freq, gain, q, type, dyn_on, range, thresh) {
     if (!b.active || !b.dyn_on) {
         b.gr_db = 0.0;
     }
+    curve_dirty = true;
     mgraphics.redraw();
 }
 
 function bang() {
     var changed = false;
     if (gr_buf) {
-        var grs = gr_buf.peek(1, 0, NUM_BANDS);
-        if (grs && grs.length >= NUM_BANDS) {
-            for (var i = 0; i < NUM_BANDS; i++) {
-                var gv = (bands[i].active && bands[i].dyn_on) ? grs[i] : 0.0;
-                if (Math.abs(bands[i].gr_db - gv) > 0.025) {
-                    bands[i].gr_db = gv;
-                    changed = true;
+        var any_dyn_on = false;
+        for (var k = 0; k < NUM_BANDS; k++) {
+            if (bands[k].active && bands[k].dyn_on) {
+                any_dyn_on = true;
+                break;
+            }
+        }
+        if (any_dyn_on) {
+            var grs = gr_buf.peek(1, 0, NUM_BANDS);
+            if (grs && grs.length >= NUM_BANDS) {
+                for (var i = 0; i < NUM_BANDS; i++) {
+                    var gv = (bands[i].active && bands[i].dyn_on) ? grs[i] : 0.0;
+                    if (Math.abs(bands[i].gr_db - gv) > 0.03) {
+                        bands[i].gr_db = gv;
+                        curve_dirty = true;
+                        changed = true;
+                    }
                 }
             }
         }
@@ -927,7 +1112,17 @@ function bang() {
     if (update_rta_from_buffer()) {
         changed = true;
     }
+    if (theme_dirty) {
+        theme_dirty = false;
+        changed = true;
+    }
     if (changed) {
+        if (drag_band >= 0) {
+            var now_t = Date.now ? Date.now() : (new Date()).getTime();
+            if (now_t - last_drag_ms < 35) {
+                return;
+            }
+        }
         mgraphics.redraw();
     }
 }
@@ -936,8 +1131,9 @@ function set_gr() {
     var args = arrayfromargs(arguments);
     var changed = false;
     for (var i = 0; i < NUM_BANDS && i < args.length; i++) {
-        if (Math.abs(bands[i].gr_db - args[i]) > 0.025) {
+        if (Math.abs(bands[i].gr_db - args[i]) > 0.03) {
             bands[i].gr_db = args[i];
+            curve_dirty = true;
             changed = true;
         }
     }
@@ -956,11 +1152,13 @@ function select(idx) {
 
 function set_scale(s) {
     global_scale = clamp(s / 100.0, 0.0, 2.0);
+    curve_dirty = true;
     mgraphics.redraw();
 }
 
 function set_adaptive_q(v) {
     adaptive_q = v ? 1 : 0;
+    curve_dirty = true;
     mgraphics.redraw();
 }
 
